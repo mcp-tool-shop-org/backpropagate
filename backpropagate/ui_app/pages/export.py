@@ -33,6 +33,7 @@ from ..components.job_panel import (
     job_reattach_banner,
     job_refusal_callout,
 )
+from ..components.train_form import choice_card
 
 # GGUF levels: exactly `backprop export --quantization` (ui-v2 P2; the old
 # grid offered q3_K_M / q6_K, which the CLI rejects). (label, value, note)
@@ -75,35 +76,28 @@ def _source_group() -> rx.Component:
     )
 
 
-def _choice_card(radio_label: str, value: str, description: str) -> rx.Component:
-    """One radio option as a bordered choice card: label on top, muted
-    description on the next line. (ui-v2 P1 redesign pass 2 — the previous
-    wrap=wrap flex row rendered all descriptions concatenated on one line.)"""
-    return rx.flex(
-        rx.radio.item(radio_label, value=value),
-        rx.text(
-            description,
-            size="1",
-            style={"color": "var(--bp-muted)", "font_size": "11px"},
-        ),
-        direction="column",
-        gap="var(--space-1)",
-        padding="var(--space-3)",
-        style={
-            "background": "var(--bp-surface-2)",
-            "border": "1px solid var(--bp-border)",
-            "border_radius": "var(--bp-r-md)",
-        },
-    )
+def _choice_card(radio_label: str, value: str, description: str, on_pick=None) -> rx.Component:
+    """One radio option as a selectable card: the shared ui-v2 choice card
+    (whole card clickable, checked card highlighted, short accessible name)."""
+    return choice_card(radio_label, value, description, on_pick)
 
 
 def _format_group() -> rx.Component:
     return Group(
         rx.radio.root(
             rx.grid(
-                _choice_card("LoRA", "lora", "Just the adapter weights (small · portable)."),
-                _choice_card("Merged", "merged", "Adapter merged into base — full HF model."),
-                _choice_card("GGUF", "gguf", "Quantized GGUF — Ollama / llama.cpp ready."),
+                _choice_card(
+                    "LoRA", "lora", "Just the adapter weights: small and portable.",
+                    ExportState.set_format("lora"),
+                ),
+                _choice_card(
+                    "Merged", "merged", "The adapter merged into the base: a full model.",
+                    ExportState.set_format("merged"),
+                ),
+                _choice_card(
+                    "GGUF", "gguf", "A quantized file for Ollama and llama.cpp.",
+                    ExportState.set_format("gguf"),
+                ),
                 columns="repeat(3, 1fr)",
                 gap="var(--space-3)",
                 width="100%",
@@ -120,7 +114,10 @@ def _quant_grid() -> rx.Component:
     return Group(
         rx.radio.root(
             rx.grid(
-                *(_choice_card(label, value, note) for label, value, note in _GGUF_QUANTS),
+                *(
+                    _choice_card(label, value, note, ExportState.set_gguf_quant(value))
+                    for label, value, note in _GGUF_QUANTS
+                ),
                 columns="repeat(3, 1fr)",
                 gap="var(--space-3)",
                 width="100%",
@@ -463,18 +460,23 @@ def _output_group() -> rx.Component:
     return Group(
         rx.flex(
             _label("Output path"),
-            rx.text(
-                rx.cond(
-                    TrainState.job_kind == "export",
-                    rx.cond(
-                        TrainState.job_output_path != "",
-                        TrainState.job_output_path,
-                        "A new folder inside the UI output folder (shown here when the export finishes).",
-                    ),
-                    "A new folder inside the UI output folder (shown here when the export finishes).",
+            rx.cond(
+                (TrainState.job_kind == "export") & (TrainState.job_output_path != ""),
+                rx.text(
+                    TrainState.job_output_path,
+                    size="2",
+                    style={
+                        "font_family": "var(--bp-mono)",
+                        "color": "var(--bp-text)",
+                        "word_break": "break-all",
+                    },
                 ),
-                size="2",
-                style={"font_family": "var(--bp-mono)", "color": "var(--bp-text-2)"},
+                rx.text(
+                    "A new folder inside the UI output folder, shown here when "
+                    "the export finishes.",
+                    size="2",
+                    style={"color": "var(--bp-text-2)"},
+                ),
             ),
             rx.cond(
                 ExportState.source_model_path == "",
@@ -485,13 +487,11 @@ def _output_group() -> rx.Component:
                         style={"color": "var(--bp-text-2)"},
                     ),
                     rx.text(
-                        "Paste a run's output folder into the Source field above "
-                        "(UI runs save to ~/.backpropagate/ui-outputs/jobs/<run>/"
-                        "output; the run's page shows its path), pick a format, "
-                        "then Export. From the shell: "
-                        "`backprop export <adapter> --format gguf`.",
+                        "Open a run on the Runs page and press Export the model, "
+                        "or paste a run's output folder into Source above. Then "
+                        "pick a format and press Export.",
                         size="1",
-                        style={"color": "var(--bp-muted)"},
+                        style={"color": "var(--bp-muted)", "font_size": "13px"},
                     ),
                     direction="column",
                     gap="var(--space-2)",
@@ -579,8 +579,11 @@ def export_page() -> rx.Component:
                     ),
                     direction="column",
                     gap="var(--space-6)",
-                    padding="var(--space-7)",
+                    padding=rx.breakpoints(
+                        initial="var(--space-4)", md="var(--space-6)", xl="var(--space-7)"
+                    ),
                     max_width="1320px",
+                    margin_x="auto",
                     width="100%",
                     on_mount=[TrainState.refresh_gpu, TrainState.attach_active_job],
                 ),

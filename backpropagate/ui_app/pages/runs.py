@@ -285,13 +285,11 @@ def _empty_state() -> rx.Component:
                     style={"color": "var(--bp-text-2)"},
                 ),
                 rx.text(
-                    "Train a model to see it here. From the UI: open the Single run "
-                    "tab and press Start training — UI runs land in this list "
-                    "automatically, no refresh needed. From the shell: run "
-                    "`backprop train <model> <dataset.jsonl>` with --output inside "
-                    "the UI output directory.",
+                    "Start a run on the Single run or Multi-run page and it shows "
+                    "up here on its own. Runs from backprop train appear too when "
+                    "their --output is inside the UI output folder.",
                     size="1",
-                    style={"color": "var(--bp-muted)"},
+                    style={"color": "var(--bp-muted)", "font_size": "13px", "text_align": "center"},
                 ),
                 direction="column",
                 gap="var(--space-2)",
@@ -376,9 +374,9 @@ def runs_page() -> rx.Component:
                             },
                         ),
                         rx.text(
-                            "Recent training runs from this output directory. "
-                            "Mirrors `backprop list-runs`. Refresh after a CLI "
-                            "training to pick up new entries.",
+                            "Every run in the UI output folder, newest first: the "
+                            "same list as backprop list-runs. Open one for its loss "
+                            "curve, log and export.",
                             size="2",
                             style={"color": "var(--bp-muted)"},
                         ),
@@ -453,8 +451,8 @@ def runs_page() -> rx.Component:
                     rx.cond(
                         RunsState.last_loaded_at != "",
                         rx.text(
-                            f"Loaded {RunsState.runs.length()} run(s) at "
-                            + RunsState.last_loaded_at,
+                            f"{RunsState.runs.length()} runs · updated "
+                            + RunsState.last_loaded_label,
                             size="1",
                             style={"color": "var(--bp-muted-2)", "font_size": "10px"},
                         ),
@@ -462,8 +460,11 @@ def runs_page() -> rx.Component:
                     ),
                     direction="column",
                     gap="var(--space-6)",
-                    padding="var(--space-7)",
+                    padding=rx.breakpoints(
+                        initial="var(--space-4)", md="var(--space-6)", xl="var(--space-7)"
+                    ),
                     max_width="1320px",
+                    margin_x="auto",
                     width="100%",
                     on_mount=[
                         RunsState.load_runs,

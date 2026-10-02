@@ -492,6 +492,7 @@ def vram_estimate_card() -> rx.Component:
                 ),
                 rx.text(
                     S.vram_est_label,
+                    id="bp-vram-estimate",
                     class_name="bp-num",
                     style={"color": "var(--bp-text)", "font_size": "15px", "font_weight": "600"},
                 ),

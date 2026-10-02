@@ -663,6 +663,23 @@ def _read_log_tail(log_path: str, n: int = 20) -> list[str]:
     return [ln[:300] for ln in lines if ln.strip()][-n:]
 
 
+def _fmt_bytes(n: float) -> str:
+    """Human size: "27.6 GB", "519.6 MB", "12 KB" (binary units, like the OS)."""
+    n = float(n or 0)
+    for unit, scale in (("GB", 1024**3), ("MB", 1024**2), ("KB", 1024)):
+        if n >= scale:
+            return f"{n / scale:.1f} {unit}" if unit != "KB" else f"{n / scale:.0f} KB"
+    return f"{n:.0f} B"
+
+
+def _fmt_local_time(ts: float | None = None) -> str:
+    """"14:05" local time for "updated at" captions."""
+    import datetime as _dt
+
+    when = _dt.datetime.fromtimestamp(ts) if ts else _dt.datetime.now()
+    return when.strftime("%H:%M")
+
+
 # ---- ui-v2 P3: presets, LoRA shapes, methods, the VRAM estimate ----------------
 
 #: LoRA shape quick picks: (rank, alpha, target modules). Exactly
@@ -2840,6 +2857,7 @@ class RunsState(rx.State):
     status_filter: str = ""  # "" / running / completed / failed
     output_dir_override: str = ""
     last_loaded_at: str = ""
+    last_loaded_label: str = ""
 
     # Hard cap on rows rendered at once. The CLI defaults to 50; the table can
     # comfortably render this many without pagination. v1.3 will add a
@@ -3004,6 +3022,7 @@ class RunsState(rx.State):
                 })
             self.runs = trimmed
             self.last_loaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            self.last_loaded_label = _fmt_local_time()
         finally:
             self.loading = False
 
@@ -3509,6 +3528,7 @@ class RunDetailState(rx.State):
                             self.checkpoints.append({
                                 "name": child.name,
                                 "size_mb": f"{size_bytes / (1024**2):.1f}",
+                                "size_label": _fmt_bytes(size_bytes),
                                 "timestamp": str(
                                     __import__("datetime").datetime.fromtimestamp(
                                         child.stat().st_mtime
@@ -3940,6 +3960,7 @@ class ModelsState(rx.State):
 
     models: list[dict] = []
     total_size_mb: str = "0"
+    total_size_label: str = ""
     # UI-A-002 (Wave A2): the HF cache dir is ``~/.cache/huggingface/hub`` —
     # it embeds the operator's home dir + username. Held in a backend-only
     # var; the client reads the redacted ``cache_dir_display`` computed var.
@@ -3955,6 +3976,7 @@ class ModelsState(rx.State):
     # as /runs and /run-detail.
     error_suggestion: str = ""
     last_loaded_at: str = ""
+    last_loaded_label: str = ""
     # CLIUI-B-005 (Stage C): per-row in-flight flag for the delete affordance.
     # Holds the ``dir_name`` currently being deleted (empty when idle). Drives
     # the row's ``disabled=`` binding AND gates re-entry inside delete_model so
@@ -4030,9 +4052,10 @@ class ModelsState(rx.State):
                         "name": pretty,
                         "dir_name": name,
                         "size_mb": f"{size_bytes / (1024**2):.1f}",
+                        "size_label": _fmt_bytes(size_bytes),
                         "size_bytes": size_bytes,
                         "last_modified": (
-                            datetime.fromtimestamp(mtime).isoformat(timespec="seconds")
+                            datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
                             if mtime else "-"
                         ),
                     })
@@ -4047,7 +4070,9 @@ class ModelsState(rx.State):
             model_rows.sort(key=lambda r: r["size_bytes"], reverse=True)
             self.models = model_rows
             self.total_size_mb = f"{total_bytes / (1024**2):.1f}"
+            self.total_size_label = _fmt_bytes(total_bytes)
             self.last_loaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            self.last_loaded_label = _fmt_local_time()
         finally:
             self.loading = False
 

@@ -412,8 +412,11 @@ def dataset_page() -> rx.Component:
                     _filter_group(),
                     direction="column",
                     gap="var(--space-6)",
-                    padding="var(--space-7)",
+                    padding=rx.breakpoints(
+                        initial="var(--space-4)", md="var(--space-6)", xl="var(--space-7)"
+                    ),
                     max_width="1320px",
+                    margin_x="auto",
                 ),
                 flex_grow="1",
                 style={"height": "100%"},

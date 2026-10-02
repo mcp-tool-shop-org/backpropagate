@@ -286,7 +286,10 @@ class TestReadOnlyPackage:
         }
         blocker = tmp_path / "localappdata"
         blocker.write_text("not-a-directory", encoding="utf-8")
+        # Both platform roots, so the per-user folder is blocked on Windows
+        # (LOCALAPPDATA) and on Linux / macOS (XDG_CACHE_HOME) alike.
         monkeypatch.setenv("LOCALAPPDATA", str(blocker))
+        monkeypatch.setenv("XDG_CACHE_HOME", str(blocker))
         _deny_package_write_access(monkeypatch, pkg)
         _forbid_package_writes(monkeypatch, pkg)
 
@@ -311,7 +314,10 @@ class TestReadOnlyPackage:
         (pkg / "rxconfig.py").write_text("leave-me", encoding="utf-8")
         blocker = tmp_path / "localappdata"
         blocker.write_text("not-a-directory", encoding="utf-8")
+        # Both platform roots, so the per-user folder is blocked on Windows
+        # (LOCALAPPDATA) and on Linux / macOS (XDG_CACHE_HOME) alike.
         monkeypatch.setenv("LOCALAPPDATA", str(blocker))
+        monkeypatch.setenv("XDG_CACHE_HOME", str(blocker))
         messages: list[str] = []
 
         got = prepare_ui_cwd(pkg, version="1.8.2", warn=messages.append)

@@ -493,7 +493,10 @@ class TestUiWorkdir:
         monkeypatch.delenv("BACKPROPAGATE_UI_WORKDIR", raising=False)
         blocker = tmp_path / "localappdata"
         blocker.write_text("nope", encoding="utf-8")
+        # Both platform roots, so the per-user folder is blocked on Windows
+        # (LOCALAPPDATA) and on Linux / macOS (XDG_CACHE_HOME) alike.
         monkeypatch.setenv("LOCALAPPDATA", str(blocker))
+        monkeypatch.setenv("XDG_CACHE_HOME", str(blocker))
 
         assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_OK
 
@@ -511,7 +514,10 @@ class TestUiWorkdir:
         monkeypatch.delenv("BACKPROPAGATE_UI_WORKDIR", raising=False)
         blocker = tmp_path / "localappdata"
         blocker.write_text("nope", encoding="utf-8")
+        # Both platform roots, so the per-user folder is blocked on Windows
+        # (LOCALAPPDATA) and on Linux / macOS (XDG_CACHE_HOME) alike.
         monkeypatch.setenv("LOCALAPPDATA", str(blocker))
+        monkeypatch.setenv("XDG_CACHE_HOME", str(blocker))
         real_access = os.access
 
         def access(path, mode, *args, **kwargs):

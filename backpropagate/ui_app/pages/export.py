@@ -261,7 +261,8 @@ def _hub_group() -> rx.Component:
                     _label("HuggingFace API token (write-once)"),
                     # UI-A-001 (Wave A1 CRITICAL): write-only input. We do
                     # NOT bind ``value=`` back to a state var — the raw token
-                    # lives only in the backend-only ExportState._hub_token
+                    # lives only in process memory (ui_state._HUB_TOKENS),
+                    # never in a state var,
                     # and never round-trips to the client. ``on_change``
                     # pushes each keystroke into the backend setter; the
                     # field renders empty on every server-driven re-render

@@ -165,6 +165,25 @@ def _prune_stale_siblings(
             warn(f"Could not remove a stale UI working directory {child}: {exc}")
 
 
+def clear_saved_ui_state(workdir: Path, warn: Callable[[str], None]) -> None:
+    """Remove Reflex's saved session state (``.states/``) left by an earlier run.
+
+    Reflex pickles each browser session's state there and keeps the files
+    after the server stops. Up to 1.8.1 that state could hold a HuggingFace
+    token typed into the Export page; nothing in it is needed across a
+    restart (a running job is found again from its own files), so every
+    launch starts from none. ``reflex run`` resets this folder itself today;
+    doing it here keeps the guarantee ours rather than the framework's.
+    """
+    states = Path(workdir) / ".states"
+    if states.is_symlink() or not states.is_dir():
+        return
+    try:
+        shutil.rmtree(states)
+    except OSError as exc:
+        warn(f"Could not remove saved UI session state at {states}: {exc}")
+
+
 def ensure_ui_workdir(
     package_dir: Path,
     *,
@@ -189,6 +208,7 @@ def ensure_ui_workdir(
     if override:
         workdir = Path(override).expanduser()
         workdir.mkdir(parents=True, exist_ok=True)
+        clear_saved_ui_state(workdir, warn)
         _ensure_stub_rxconfig(package_dir, workdir)
         sync_ui_assets(package_dir, workdir)
         return workdir
@@ -197,6 +217,7 @@ def ensure_ui_workdir(
     workdir = default_ui_work_root() / f"{version}-{key}"
     workdir.mkdir(parents=True, exist_ok=True)
     _prune_stale_siblings(workdir.parent, current=workdir.name, key=key, warn=warn)
+    clear_saved_ui_state(workdir, warn)
     _ensure_stub_rxconfig(package_dir, workdir)
     sync_ui_assets(package_dir, workdir)
     return workdir

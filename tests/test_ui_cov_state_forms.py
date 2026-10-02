@@ -763,14 +763,14 @@ class TestExportHubFieldValidation:
         s = us.ExportState()
         s.set_hub_token("hf_" + "a" * 37)
         assert s.hub_token_set is True and s.hub_token_error == ""
-        assert s._hub_token == "hf_" + "a" * 37
+        assert s._hub_token_value() == "hf_" + "a" * 37
         s.set_hub_token("short")
         assert s.hub_token_set is False and "20-200" in s.hub_token_error
         s.set_hub_token("x" * 201)
         assert s.hub_token_set is False and s.hub_token_error
         s.set_hub_token("hf_" + "b" * 37)
         s.set_hub_token("   ")
-        assert (s._hub_token, s.hub_token_set, s.hub_token_error) == ("", False, "")
+        assert (s._hub_token_value(), s.hub_token_set, s.hub_token_error) == ("", False, "")
         s.set_hub_token(None)  # type: ignore[arg-type]
         assert s.hub_token_set is False
 
@@ -890,7 +890,7 @@ class TestPushToHubExecution:
         assert s.hub_status == "done"
         assert "huggingface.co/owner/repo" in s.hub_message and "dev" in s.hub_message
         # credential hygiene: wiped after use, and never echoed in the message
-        assert s._hub_token == "" and s.hub_token_set is False
+        assert s._hub_token_value() == "" and s.hub_token_set is False
         assert "a" * 37 not in s.hub_message
 
     def test_token_file_push_reads_the_file_at_push_time(self, sandbox, tmp_path, push_recorder):
@@ -925,7 +925,7 @@ class TestPushToHubExecution:
         assert s.hub_status == "error"
         assert s.hub_message.startswith("RUNTIME_HUB_PUSH: ")
         assert "alice" not in s.hub_message and "Try: check your token scope" in s.hub_message
-        assert s._hub_token  # kept on failure so the operator can retry
+        assert s._hub_token_value()  # kept on failure so the operator can retry
 
     def test_foreign_exception_is_opaque_to_the_client(self, sandbox, push_recorder):
         push_recorder.exc = RuntimeError("401 for token hf_" + "q" * 37 + " at /home/alice/x")

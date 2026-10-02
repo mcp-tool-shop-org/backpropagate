@@ -27,10 +27,36 @@ from __future__ import annotations
 import math
 import re
 import tempfile
+import threading
 from pathlib import Path
 from typing import Literal
 
 import reflex as rx
+
+# Hub tokens typed into the Export page, by browser session. Process memory
+# only, on purpose: see the comment on ``ExportState.hub_token_set``.
+_HUB_TOKENS: dict[str, str] = {}
+_HUB_TOKENS_LOCK = threading.Lock()
+_HUB_TOKENS_MAX = 32
+
+
+def _hub_token_put(session: str, token: str) -> None:
+    """Remember (or, with an empty ``token``, forget) one session's token."""
+    with _HUB_TOKENS_LOCK:
+        _HUB_TOKENS.pop(session, None)
+        if not token:
+            return
+        while len(_HUB_TOKENS) >= _HUB_TOKENS_MAX:
+            # Oldest first: abandoned sessions must not pile up for the
+            # lifetime of a shared server.
+            _HUB_TOKENS.pop(next(iter(_HUB_TOKENS)))
+        _HUB_TOKENS[session] = token
+
+
+def _hub_token_get(session: str) -> str:
+    with _HUB_TOKENS_LOCK:
+        return _HUB_TOKENS.get(session, "")
+
 
 # Shared literal types — referenced across multiple State classes.
 RunState = Literal["idle", "loading", "active", "paused", "done", "stopped", "error"]
@@ -2222,18 +2248,15 @@ class ExportState(rx.State):
     hub_private: bool = True
     hub_branch: str = "main"
     hub_branch_error: str = ""
-    # UI-A-001 (Wave A1 CRITICAL): the raw HF token is held in a BACKEND-only
-    # var (``_``-prefix → Reflex never serializes it into the client WS state
-    # bundle). Pre-fix ``hub_token`` was a public (base_vars) var bound
-    # two-way to a type=password input, so the live write-scoped credential
-    # round-tripped to the browser on every keystroke; the password mask was
-    # visual only. The input is now write-only: the setter populates the
-    # backend var but the field does NOT bind ``value=`` back (drop the
-    # controlled-input round-trip). ``hub_token_set`` is a public BOOL mirror
-    # so the form can show a "token set" affordance without echoing the
-    # secret. ``hub_token_error`` stays public — it's an operator-facing
-    # validation string, never the credential.
-    _hub_token: str = ""  # nosec B105 — backend-only secret store, not a credential literal
+    # The raw HF token is NOT a state var of any kind. Reflex pickles every
+    # var of a state, backend (``_``-prefixed) vars included, to
+    # ``<workdir>/.states/*.pkl`` (its default disk state manager), so a token
+    # held on the state was written to disk in the clear and stayed there
+    # after the UI stopped (external review 2026-10-02, C-1). It lives in
+    # process memory only, in ``_HUB_TOKENS``, keyed by the browser session.
+    # The input is write-only (no ``value=`` binding), ``hub_token_set`` is a
+    # public BOOL mirror so the form can show "token set" without the secret,
+    # and ``hub_token_error`` is an operator-facing validation string.
     hub_token_set: bool = False
     hub_token_error: str = ""
     hub_status: str = ""  # "" / "pushing" / "done" / "error"
@@ -2422,22 +2445,33 @@ class ExportState(rx.State):
         self.hub_token_file_path = cleaned
         self.hub_token_file_path_error = err
 
+    def _hub_session(self) -> str:
+        """The browser session this state belongs to (the token store's key)."""
+        try:
+            return str(self.router.session.client_token or "")
+        except Exception:  # noqa: BLE001 - a state built without a router (tests)
+            return ""
+
+    def _hub_token_value(self) -> str:
+        """The inline token for this session, from process memory."""
+        return _hub_token_get(self._hub_session())
+
     @rx.event
     def set_hub_token(self, value: str) -> None:
-        """Set the HF API token (UI-A-001: write-only into a backend var).
+        """Set the HF API token (write-only, process memory only).
 
         The input is write-only — the form does NOT bind ``value=`` back to
         this field, so the raw secret never round-trips to the client. The
-        value lives ONLY in the backend var ``self._hub_token`` (never in
-        base_vars / the WS bundle), is never logged, never serialized to run
-        history, never echoed in error messages. ``_hub_token`` clears after
-        a successful push to limit exposure. ``hub_token_set`` is a public
-        bool mirror so the form can render a "token set" affordance without
-        exposing the credential.
+        value is kept in ``_HUB_TOKENS`` (process memory), never in a state
+        var: Reflex writes every state var to disk. It is never logged, never
+        serialized to run history, never echoed in error messages, and it is
+        dropped after a successful push and when the UI stops.
+        ``hub_token_set`` is a public bool mirror so the form can render a
+        "token set" affordance without exposing the credential.
         """
         cleaned = (value or "").strip()
         if not cleaned:
-            self._hub_token = ""  # nosec B105 — backend-var clear, not a credential literal
+            _hub_token_put(self._hub_session(), "")
             self.hub_token_set = False
             self.hub_token_error = ""  # nosec B105 — error-message clear, not a credential literal
             return
@@ -2449,7 +2483,7 @@ class ExportState(rx.State):
             self.hub_token_error = "Token doesn't look like an HF token (20-200 chars expected)"  # nosec B105 — operator-facing validation message, not a credential
             self.hub_token_set = False
             return
-        self._hub_token = cleaned  # nosec B105 — backend-only secret store
+        _hub_token_put(self._hub_session(), cleaned)
         self.hub_token_set = True
         self.hub_token_error = ""  # nosec B105 — error-message clear, not a credential literal
 
@@ -2482,7 +2516,18 @@ class ExportState(rx.State):
         # FRONTEND-F-004: mutual-exclusion + at-least-one check on the two
         # token surfaces. Mirrors the CLI's `--token` vs `--token-file`
         # contract in cmd_push (cli.py ~3411).
-        inline_token_set = bool(self._hub_token) and not self.hub_token_error
+        inline_token = self._hub_token_value()
+        if self.hub_token_set and not inline_token:
+            # The UI was restarted (or the token was dropped to make room):
+            # the page still says "token set" but the memory-only token is gone.
+            self.hub_token_set = False
+            self.hub_status = "error"
+            self.hub_message = (
+                "Enter the HuggingFace token again: it is kept in memory only "
+                "and is no longer available."
+            )
+            return
+        inline_token_set = bool(inline_token) and not self.hub_token_error
         token_file_set = (
             bool(self.hub_token_file_path) and not self.hub_token_file_path_error
         )
@@ -2530,7 +2575,7 @@ class ExportState(rx.State):
                     flag_name="--token-file (UI)",
                 )
             else:
-                resolved_token = self._hub_token
+                resolved_token = inline_token
 
             _push(
                 local_path=self.source_model_path,
@@ -2545,8 +2590,8 @@ class ExportState(rx.State):
                 f"Pushed to https://huggingface.co/{self.hub_repo_id} "
                 f"on branch {self.hub_branch or 'main'}."
             )
-            # Clear token after successful push (UI-A-001: backend var).
-            self._hub_token = ""  # nosec B105 — token wipe after push, not a credential literal
+            # Drop the token after a successful push.
+            _hub_token_put(self._hub_session(), "")
             self.hub_token_set = False
             # FRONTEND-F-004: the token-file PATH itself is not a credential
             # — it's a reference to a file the operator manages outside

@@ -175,6 +175,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **A HuggingFace token typed into the Export page is no longer written to
+  disk.** The web UI's framework saves each browser session's state to
+  `.states/` in the UI working directory, and that included the token field
+  (1.4 through 1.8.1). The token sat in that file, readable by your own user
+  account, until a successful push or the next `backprop ui` launch. It is
+  now kept in process memory only, and every launch removes saved session
+  state from an earlier run. After a UI restart the page asks for the token
+  again. The token-file option was not affected. If you typed a token into
+  an older version and did not push, start the UI once after upgrading, or
+  delete the `.states` folder, or rotate the token.
 - **Web UI job runner hardened** after an external review (all in unreleased
   code). A signed-in remote client (`--share` / `--auth`) could previously:
   point a training or calibration job at any folder the server can read as

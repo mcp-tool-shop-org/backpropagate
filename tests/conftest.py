@@ -159,6 +159,25 @@ def _no_machine_vram_calibration(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_leftover_hub_tokens():
+    """Empty the UI's in-memory Hub token store around every test.
+
+    Test states have no browser session, so they all share one key; a token
+    one test set must not look "set" to the next.
+    """
+    import sys
+
+    def _clear() -> None:
+        module = sys.modules.get("backpropagate.ui_state")
+        if module is not None:
+            module._HUB_TOKENS.clear()
+
+    _clear()
+    yield
+    _clear()
+
+
+@pytest.fixture(autouse=True)
 def _default_backend_to_cuda(request, monkeypatch):
     """Default the training backend to CUDA for the whole suite.
 

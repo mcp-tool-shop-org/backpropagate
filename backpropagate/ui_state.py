@@ -1427,10 +1427,13 @@ class TrainState(rx.State):
         validate their forms, then hand off here so every job shares one
         poller, one progress card and one reattach path.
         """
-        from .ui_jobs import JobSpec
+        from .ui_jobs import SERVER_ONLY_SPEC_FIELDS, JobSpec
 
         self.job_refusal = ""
-        allowed = set(JobSpec.__dataclass_fields__)
+        # This handler is reachable from the browser, so ``payload`` is
+        # untrusted: a client may set form fields only, never where the job
+        # writes (output_dir / scratch_root) or trust_remote_code.
+        allowed = set(JobSpec.__dataclass_fields__) - SERVER_ONLY_SPEC_FIELDS
         spec_kwargs = {k: v for k, v in dict(payload).items() if k in allowed}
         try:
             spec = JobSpec(**spec_kwargs)

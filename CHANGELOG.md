@@ -147,6 +147,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **A web UI client can no longer choose where a job writes.** The handler
+  that starts multi-run and export jobs copied every job field from the
+  browser's request, including the output folder and the job folder, so an
+  authenticated client (`--share` / `--auth`) could make a training or
+  export job write outside the UI output folder. The handler now drops
+  those fields (and `trust_remote_code`), and the job manager refuses any
+  job whose write locations leave the sandbox. Introduced in the unreleased
+  UI job work (#282); never shipped in a release.
 - **Docs-site dependency `devalue` 5.9.2 -> 5.9.4** (`site/package-lock.json`,
   transitive via Astro). Closes GHSA-j22f-vq7h-c4qm, GHSA-hx4r-w6wj-j8fg,
   GHSA-mcm9-63f2-9j32, GHSA-wf3x-273g-mvxv, GHSA-x5rw-q4pp-hg5g and

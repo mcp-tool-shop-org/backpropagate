@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before use. Pip installs are unchanged.
 - **Handbook privacy page**: what the app stores, what it sends and when,
   and how to remove it all.
+- **Train, multi-run and export from the web UI** (ui-v2, #281 and the P2
+  PR). Each job runs as its own process (`backprop train` / `multi-run` /
+  `export`), one at a time, with live steps, raw and smoothed loss, time
+  left, a stall warning and device-wide GPU memory and temperature. **Stop
+  and save checkpoint** stops at the next step and saves; a multi-run stops
+  after the current run and keeps what was merged; an export can be
+  cancelled. A page reload or a new tab reattaches to a running job, and a
+  failure shows its error code with the last lines of the log. Run pages
+  gain **Export the model**. The UI was restyled (rounded cards, one spacing
+  scale, two columns on wide screens) and opens in dark mode.
 - **`--report-to {auto,none,wandb,tensorboard,mlflow}`** on `backprop train`
   and `backprop multi-run` (#276), default `auto`. Until now the CLI had no
   way to turn experiment tracking off.
@@ -56,6 +66,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (HTTP 401 / 403 / 421, WebSocket 4401 / 4403 / 4404), and brute-force
   attempts are still refused from the 101st per minute at the default cap. The per-user UI
   folder (#271) also lacked the `assets/` folder, so it is now copied in.
+- **Web UI pages show real values.** The status rail reads the card's
+  actual VRAM and temperature (it showed a fixed "0.0 / 16.0 GB" and 0 °C).
+  Runs lists runs started from the UI, shows a stopped run as stopped, and
+  shows readable start times and the dataset's file name. The Models page
+  lists the Hugging Face cache the machine uses (`HF_HUB_CACHE` / `HF_HOME`;
+  it only read `~/.cache/huggingface/hub`). Export offers exactly the CLI's
+  GGUF levels (it offered `q3_K_M` and `q6_K`, which the CLI rejects) and
+  multi-run the CLI's merge modes. Literal `[KEY]` and `<redacted-path>`
+  text is gone.
 - **Setting `BACKPROPAGATE_UI__OUTPUT_DIR` no longer crashes every
   command** (#277): the UI settings had no `output_dir` field, so loading
   the settings failed validation (`Extra inputs are not permitted`).

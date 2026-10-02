@@ -38,8 +38,11 @@ Theme = Literal["dark", "light"]
 ActiveSurface = Literal["train", "multi-run", "export", "dataset"]
 ExportFormat = Literal["lora", "merged", "gguf"]
 Quantization = Literal["4-bit", "8-bit", "16-bit"]
-MergeMode = Literal["slao", "weighted", "ties"]
-GgufQuant = Literal["q2_K", "q3_K_M", "q4_K_M", "q5_K_M", "q6_K", "q8_0"]
+# ui-v2 P2: exactly what the multi-run job maps to CLI flags
+# (slao | simple -> --merge-mode; ties -> --merge-mode slao --merge-strategy ties).
+MergeMode = Literal["slao", "simple", "ties"]
+# ui-v2 P2: exactly `backprop export --quantization` choices.
+GgufQuant = Literal["f16", "q8_0", "q5_k_m", "q4_k_m", "q4_0", "q2_k"]
 DatasetFormatHint = Literal["auto", "sharegpt", "alpaca", "openai", "jsonl"]
 
 # Constants for the setters' clamps. Centralised so an operator can read the
@@ -62,19 +65,6 @@ _TARGET_MODULES_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_,\s]*$")
 # W&B run name: same shape that wandb itself accepts.
 _WANDB_RUN_NAME_RE = re.compile(r"^[A-Za-z0-9._\-]+$")
 
-# CLIUI-B-001 (Stage C UI honesty floor): the Train / Multi-run / Export Start
-# buttons do NOT drive training from the browser yet — the live background-task
-# hookup is CLIUI-B-002, deferred to the feature pass. Rather than fake a
-# loading spinner that implies a run is underway (the pre-fix stub behaviour,
-# which the README's "train from the UI" claim made actively misleading), the
-# Start handlers surface one of these notices pointing the operator at the
-# shell command that DOES work today. The ``{cmd}`` is the relevant subcommand
-# so each surface names its own CLI path.
-_CLI_NOTICE_TEMPLATE = (
-    "Starting a run from the web UI ships in a future release — "
-    "run `{cmd}` from the shell for now."
-)
-_CLI_NOTICE_TRAIN = _CLI_NOTICE_TEMPLATE.format(cmd="backprop train")
 
 
 def _ts_now() -> str:
@@ -122,12 +112,113 @@ def _merge_job_history_rows(
             rid = str(entry.get("run_id") or "")
             if rid and rid in seen:
                 continue
+            override = _job_status_override(hist.parent.parent)
+            if override:
+                entry = {**entry, "status": override}
             if status and str(entry.get("status") or "") != status:
                 continue
             if rid:
                 seen.add(rid)
             merged.append(entry)
     return _sort_trim(merged)
+
+
+def _job_status_override(job_dir: object) -> str | None:
+    """A UI job's own outcome from ``job.json`` (ui-v2 P2).
+
+    RunHistoryManager records a cooperative stop as "completed" (training
+    returned normally); the job record knows it was stopped. Returns
+    "stopped" / "failed" when the job record says so, else None.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    try:
+        job = _json.loads((_Path(str(job_dir)) / "job.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    status = str(job.get("status") or "") if isinstance(job, dict) else ""
+    return status if status in ("stopped", "failed") else None
+
+
+def _locate_run_history_dir(history_dir: object, run_id: str):
+    """The directory whose run_history.json holds ``run_id``.
+
+    CLI runs live in the UI output dir's own history; UI-started runs live
+    in ``jobs/<job>/output/run_history.json`` (ui-v2 P1/P2). Returns
+    ``(dir, job_dir_or_None)``; falls back to ``(history_dir, None)``.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    root = _Path(str(history_dir))
+    if not run_id:
+        return root, None
+    for hist in sorted((root / "jobs").glob("*/output/run_history.json")):
+        try:
+            data = _json.loads(hist.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        entries = data.get("runs") if isinstance(data, dict) else data
+        if isinstance(entries, list) and any(
+            isinstance(e, dict) and str(e.get("run_id") or "") == run_id for e in entries
+        ):
+            return hist.parent, hist.parent.parent
+    return root, None
+
+
+def _job_loss_curve(job_dir: object, limit: int = 400) -> list[float]:
+    """Loss values from a UI job's events.jsonl (step rows), oldest first."""
+    import json as _json
+    from pathlib import Path as _Path
+
+    out: list[float] = []
+    try:
+        lines = (_Path(str(job_dir)) / "events.jsonl").read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        try:
+            row = _json.loads(line)
+        except ValueError:
+            continue
+        loss = row.get("loss") if isinstance(row, dict) and row.get("kind") == "step" else None
+        if isinstance(loss, (int, float)):
+            out.append(float(loss))
+    return out[-limit:]
+
+
+def _fmt_started(value: object) -> str:
+    """'2026-10-02T04:45:42.269557' -> '2026-10-02 04:45' (the Runs table)."""
+    from datetime import datetime
+
+    text = str(value or "").strip()
+    if not text or text == "-":
+        return "-"
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return text[:16].replace("T", " ")
+
+
+def _dataset_label(value: object) -> str:
+    """A dataset's file name (or the HF dataset id). Full local paths stay
+    off the client: the name is what identifies it, and it carries no
+    home directory."""
+    import re as _re
+
+    text = str(value or "").strip()
+    if not text or text == "-":
+        return "-"
+    if "/" in text or "\\" in text:
+        parts = [part for part in _re.split(r"[\\/]", text) if part]
+        # "org/name" (HF dataset id) stays as is; a filesystem path -> its name.
+        if len(parts) == 2 and not _re.match(r"^[A-Za-z]:$", parts[0]) and not text.startswith(("/", "~", ".")):
+            return text
+        return parts[-1] if parts else text
+    return text
 
 
 def _fmt_eta_range(eta_s: float) -> tuple[str, str]:
@@ -148,8 +239,6 @@ def _fmt_eta_range(eta_s: float) -> tuple[str, str]:
     return fmt(max(1.0, eta_s * 0.8)), fmt(max(2.0, eta_s * 1.3))
 
 
-_CLI_NOTICE_MULTI_RUN = _CLI_NOTICE_TEMPLATE.format(cmd="backprop multi-run")
-_CLI_NOTICE_EXPORT = _CLI_NOTICE_TEMPLATE.format(cmd="backprop export")
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +638,24 @@ def _apply_wandb_run_name(value: str) -> tuple[str | None, str]:
     return cleaned, ""
 
 
+def _read_log_tail(log_path: str, n: int = 20) -> list[str]:
+    """Last ``n`` non-empty lines of a job's output.log (requirement 10:
+    failures show the log next to the error code). Never raises."""
+    if not log_path:
+        return []
+    try:
+        with open(log_path, "rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - 32768))
+            text = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return []
+    # tqdm redraws with carriage returns; keep only the last frame per line.
+    lines = [ln.split("\r")[-1].rstrip() for ln in text.splitlines()]
+    return [ln[:300] for ln in lines if ln.strip()][-n:]
+
+
 class TrainState(rx.State):
     """Train surface state: config + live run progress.
 
@@ -651,6 +758,34 @@ class TrainState(rx.State):
         if not self.ema_history:
             return ""
         return f"{self.ema_history[-1]:.4f}"
+
+    @rx.var
+    def job_chip_label(self) -> str:
+        """The progress card's state chip."""
+        return {"multi_run": "MULTI-RUN", "export": "EXPORTING"}.get(
+            self.job_kind, "TRAINING"
+        )
+
+    @rx.var
+    def job_run_label(self) -> str:
+        """'run 2 of 3' while a multi-run is going; '' otherwise."""
+        if self.job_kind == "multi_run" and self.job_runs:
+            return f"run {max(self.job_run, 1)} of {self.job_runs}"
+        return ""
+
+    @rx.var
+    def job_has_steps(self) -> bool:
+        """Export has phases, not steps: the card shows the phase instead."""
+        return self.job_kind != "export"
+
+    @rx.var
+    def done_title(self) -> str:
+        """Heading of the post-job panel."""
+        if self.job_kind == "export":
+            return "Export complete"
+        if self.run_state == "stopped":
+            return "Stopped · what next?"
+        return "Run complete · what next?"
 
     @rx.var
     def form_disabled(self) -> bool:
@@ -871,6 +1006,13 @@ class TrainState(rx.State):
     job_error_hint: str = ""
     job_output_path: str = ""
     job_stalled: bool = False
+    # ui-v2 P2: TrainState follows EVERY UI job (one at a time), so the
+    # multi-run and export pages share the progress card, rail and reattach.
+    job_kind: str = "sft"  # "sft" | "multi_run" | "export"
+    job_run: int = 0  # multi-run: current run (1-based)
+    job_runs: int = 0  # multi-run: total runs
+    # Requirement 10: on failure, the last log lines next to the error code.
+    job_log_tail: list[str] = []
     gpu_name: str = ""
     # ui-v2 P1 fix round: set ONLY when this page opened onto a run it did not
     # start (adopted mid-flight). Drives the single "Reattached…" banner — the
@@ -886,6 +1028,11 @@ class TrainState(rx.State):
     _step_samples: int = 0
 
     # ---- Event handlers (stubs; backend hookup in Phase 3) -----------------
+
+    @rx.event
+    def refuse(self, message: str) -> None:
+        """Show a start refusal from another page's form (ui-v2 P2)."""
+        self.job_refusal = str(message)
 
     @rx.event
     def dismiss_refusal(self) -> None:
@@ -937,12 +1084,7 @@ class TrainState(rx.State):
         Validation failures land in the refusal callout on screen (never a
         fake spinner); a second concurrent start is refused the same way.
         """
-        from .ui_jobs import (
-            JobRefusedError,
-            JobSpec,
-            JobValidationError,
-            get_job_manager,
-        )
+        from .ui_jobs import JobSpec
 
         self.job_refusal = ""
         form_errors = [
@@ -974,21 +1116,60 @@ class TrainState(rx.State):
             lora_r=int(self.lora_r),
             mode="lora",
         )
+        return self._begin_job(spec)
+
+    @rx.event
+    def start_job(self, payload: dict):
+        """Start a multi-run or export job for the other pages (ui-v2 P2).
+
+        ``payload`` holds JobSpec fields; MultiRunState / ExportState
+        validate their forms, then hand off here so every job shares one
+        poller, one progress card and one reattach path.
+        """
+        from .ui_jobs import JobSpec
+
+        self.job_refusal = ""
+        allowed = set(JobSpec.__dataclass_fields__)
+        spec_kwargs = {k: v for k, v in dict(payload).items() if k in allowed}
+        try:
+            spec = JobSpec(**spec_kwargs)
+        except TypeError as exc:
+            self.job_refusal = f"Could not start: {exc}"
+            return None
+        return self._begin_job(spec)
+
+    def _begin_job(self, spec):
+        """Spawn ``spec`` through the JobManager and reset the live state.
+
+        Returns the poller event, or None when the start was refused (the
+        reason lands in ``job_refusal``, on screen).
+        """
+        from .ui_jobs import JobRefusedError, JobValidationError, get_job_manager
+
         try:
             handle = get_job_manager().start(spec)
         except (JobValidationError, JobRefusedError, NotImplementedError) as exc:
             self.job_refusal = str(exc)
-            return
+            return None
         except Exception as exc:  # noqa: BLE001 — spawn failure lands on screen
-            self.job_refusal = f"Could not start training: {exc}"
-            return
+            self.job_refusal = f"Could not start: {exc}"
+            return None
         self.job_id = handle.job_id
+        self.job_kind = spec.kind
+        self.job_run = 0
+        self.job_runs = int(spec.runs) if spec.kind == "multi_run" else 0
         self.job_phase = "queued"
-        self.job_total_steps = int(self.steps)
+        if spec.kind == "multi_run":
+            self.job_total_steps = int(spec.runs) * int(spec.steps)
+        elif spec.kind == "export":
+            self.job_total_steps = 0
+        else:
+            self.job_total_steps = int(spec.steps)
         self.job_error_code = ""
         self.job_error_message = ""
         self.job_error_hint = ""
         self.job_output_path = ""
+        self.job_log_tail = []
         self.job_stalled = False
         self.run_state = "active"
         self.current_step = 0
@@ -1006,12 +1187,13 @@ class TrainState(rx.State):
         import time as _time
 
         self._last_step_epoch = _time.time()
+        what = {"multi_run": "Multi-run", "export": "Export"}.get(spec.kind, "Run")
         self.events = [
             *self.events,
             {
                 "t": _ts_now(),
                 "level": "info",
-                "msg": f"Run {handle.job_id} started in a separate process.",
+                "msg": f"{what} {handle.job_id} started in a separate process.",
             },
         ]
         return TrainState.poll_job
@@ -1049,6 +1231,7 @@ class TrainState(rx.State):
             return
         # Adopt: replays events.jsonl from byte 0 so the chart/phase rebuild.
         self.job_id = jid
+        self.job_kind = str(status.get("kind") or "sft")
         self.run_state = "active"
         self.job_phase = str(status.get("phase") or "training")
         self.job_total_steps = int(status.get("total_steps") or 0)
@@ -1193,6 +1376,17 @@ class TrainState(rx.State):
             temp = row.get("temp_c")
             if isinstance(temp, (int, float)) and temp:
                 self.gpu_temp = float(temp)
+        elif kind == "run":
+            self.job_run = int(row.get("run") or 0)
+            self.job_runs = int(row.get("runs") or self.job_runs or 0)
+            self.events = [
+                *self.events,
+                {
+                    "t": _ts_now(),
+                    "level": "info",
+                    "msg": f"Run {self.job_run} of {self.job_runs} started.",
+                },
+            ]
         elif kind == "checkpoint":
             self.events = [
                 *self.events,
@@ -1268,12 +1462,30 @@ class TrainState(rx.State):
         out_path = str(status.get("output_path") or "")
         if out_path:
             self.job_output_path = out_path
-        label = {
-            "done": "Run completed.",
-            "stopped": "Stopped early — the checkpoint was saved before the halt.",
-            "failed": "Run failed.",
-            "crashed": "The training process died unexpectedly (crashed).",
-        }.get(outcome, outcome)
+        if outcome in ("failed", "crashed"):
+            self.job_log_tail = _read_log_tail(str(status.get("log_path") or ""))
+        if self.job_kind == "export":
+            labels = {
+                "done": "Export finished.",
+                "stopped": "Export cancelled.",
+                "failed": "Export failed.",
+                "crashed": "The export process died unexpectedly (crashed).",
+            }
+        elif self.job_kind == "multi_run":
+            labels = {
+                "done": "Multi-run completed.",
+                "stopped": "Stopped early — the runs merged so far were kept.",
+                "failed": "Multi-run failed.",
+                "crashed": "The multi-run process died unexpectedly (crashed).",
+            }
+        else:
+            labels = {
+                "done": "Run completed.",
+                "stopped": "Stopped early — the checkpoint was saved before the halt.",
+                "failed": "Run failed.",
+                "crashed": "The training process died unexpectedly (crashed).",
+            }
+        label = labels.get(outcome, outcome)
         self.events = [
             *self.events,
             {
@@ -1297,6 +1509,16 @@ class TrainState(rx.State):
         from .ui_jobs import get_job_manager
 
         manager = get_job_manager()
+        if self.job_kind == "export" and self.job_id and manager.is_alive(self.job_id):
+            # An export has no step boundary to save at: cancel kills the
+            # process tree now and records the outcome as stopped.
+            manager.cancel(self.job_id)
+            self.stop_requested = True
+            self.events = [
+                *self.events,
+                {"t": _ts_now(), "level": "warn", "msg": "Cancelling the export."},
+            ]
+            return
         if self.job_id and manager.is_alive(self.job_id):
             grace = manager.grace_window(self.job_id)
             manager.request_stop(self.job_id)
@@ -1359,8 +1581,6 @@ class MultiRunState(rx.State):
     run_state: RunState = "idle"
     current_run_index: int = 0
     runs: list[dict] = []  # per-run summary (loss, step, status)
-    # CLIUI-B-001 (Stage C UI honesty floor): see TrainState.cli_notice.
-    cli_notice: str = ""
     events: list[dict] = []
 
     # ---- Setters (shared logic with TrainState via _apply_* helpers) -------
@@ -1447,7 +1667,7 @@ class MultiRunState(rx.State):
 
     @rx.event
     def set_merge_mode(self, value: str) -> None:
-        if value in ("slao", "weighted", "ties"):
+        if value in ("slao", "simple", "ties"):
             self.merge_mode = value  # type: ignore[assignment]
 
     @rx.event
@@ -1458,25 +1678,37 @@ class MultiRunState(rx.State):
         self.replay_fraction_error = err
 
     @rx.event
-    def start_multi_run(self) -> None:
-        """Handle the "Start multi-run" button — honesty floor (CLIUI-B-001).
+    def start_multi_run(self):
+        """Start a multi-run job (ui-v2 P2) through the shared job state.
 
-        Mirrors ``TrainState.start_training``: no fake loading spinner (the
-        real SLAO-sweep hookup is deferred to the feature pass), an
-        operator-facing ``cli_notice`` pointing at ``backprop multi-run``.
-        CLIUI-B-009: the breadcrumb is now APPENDED (not assigned) so the shape
-        matches ``start_training`` — the pre-fix ``self.events = [...]`` form
-        overwrote any prior log lines.
+        The form's own errors are refused on screen first; the JobManager
+        then applies the server-side checks (sandbox, caps, one job at a
+        time) and TrainState follows the job like any other.
         """
-        self.cli_notice = _CLI_NOTICE_MULTI_RUN
-        self.events = [
-            *self.events,
-            {
-                "t": "00:00:00",
-                "level": "info",
-                "msg": "UI multi-run not wired yet — use `backprop multi-run`.",
-            },
+        errors = [
+            err
+            for err in (
+                self.model_error,
+                self.dataset_path_error,
+                self.steps_error,
+                self.num_runs_error,
+                self.samples_per_run_error,
+            )
+            if err
         ]
+        if errors:
+            return TrainState.refuse("Fix the highlighted fields first: " + "; ".join(errors))
+        return TrainState.start_job(
+            {
+                "kind": "multi_run",
+                "model": self.model,
+                "dataset_path": self.dataset_path,
+                "runs": int(self.num_runs),
+                "steps": int(self.steps),
+                "samples": int(self.samples_per_run),
+                "merge": str(self.merge_mode),
+            }
+        )
 
 
 class ExportState(rx.State):
@@ -1490,7 +1722,7 @@ class ExportState(rx.State):
     source_model_path: str = ""
     source_model_path_error: str = ""
     format: ExportFormat = "lora"
-    gguf_quant: GgufQuant = "q4_K_M"
+    gguf_quant: GgufQuant = "q4_k_m"
     ollama_register: bool = False
     ollama_name: str = ""
     ollama_name_error: str = ""
@@ -1545,7 +1777,7 @@ class ExportState(rx.State):
 
     @rx.event
     def set_gguf_quant(self, value: str) -> None:
-        if value in ("q2_K", "q3_K_M", "q4_K_M", "q5_K_M", "q6_K", "q8_0"):
+        if value in ("f16", "q8_0", "q5_k_m", "q4_k_m", "q4_0", "q2_k"):
             self.gguf_quant = value  # type: ignore[assignment]
 
     @rx.event
@@ -1579,33 +1811,33 @@ class ExportState(rx.State):
 
     # Live state.
     export_state: RunState = "idle"
-    output_path: str = ""
-    # CLIUI-B-001 (Stage C UI honesty floor): see TrainState.cli_notice.
-    cli_notice: str = ""
     events: list[dict] = []
 
     @rx.event
-    def start_export(self) -> None:
-        """Handle the "Export" button — honesty floor (CLIUI-B-001).
+    def start_export(self):
+        """Start an export job (ui-v2 P2) through the shared job state.
 
-        Mirrors ``TrainState.start_training``: no fake loading spinner (the
-        real export hookup is deferred to the feature pass), an operator-facing
-        ``cli_notice`` pointing at ``backprop export``. CLIUI-B-009: the
-        breadcrumb is APPENDED (not assigned) to match ``start_training``.
-
-        NOTE: this is the LOCAL export-to-disk path. The HuggingFace Hub push
-        (``push_to_hub`` below) is a SEPARATE, fully-wired handler and is NOT
-        affected by this honesty floor.
+        This is the LOCAL export-to-disk path; the HuggingFace Hub push
+        (``push_to_hub`` below) is a separate handler.
         """
-        self.cli_notice = _CLI_NOTICE_EXPORT
-        self.events = [
-            *self.events,
-            {
-                "t": "00:00:00",
-                "level": "info",
-                "msg": "UI export not wired yet — use `backprop export`.",
-            },
+        errors = [
+            err for err in (self.source_model_path_error, self.ollama_name_error) if err
         ]
+        if errors:
+            return TrainState.refuse("Fix the highlighted fields first: " + "; ".join(errors))
+        return TrainState.start_job(
+            {
+                "kind": "export",
+                "source_path": self.source_model_path,
+                "export_format": str(self.format),
+                "quantization": str(self.gguf_quant),
+                "ollama_name": (
+                    self.ollama_name
+                    if self.ollama_register and self.format == "gguf"
+                    else ""
+                ),
+            }
+        )
 
     # ---- HuggingFace Hub push setters + handler (FRONTEND-11) --------------
 
@@ -2372,7 +2604,7 @@ class RunsState(rx.State):
             for raw in rows:
                 run_id = str(raw.get("run_id") or "")
                 short_id = run_id[:8] if run_id else "-"
-                started = str(raw.get("started_at") or "-")
+                started = _fmt_started(raw.get("started_at"))
                 duration = raw.get("duration_seconds")
                 if duration is None:
                     duration_str = "-"
@@ -2399,8 +2631,8 @@ class RunsState(rx.State):
                     # dataset is usually an absolute path, so redact it before it
                     # enters this client-serialized var (as RunDetailState does).
                     "model": str(raw.get("model_name") or raw.get("model") or "-"),
-                    "dataset": _redact_action(
-                        str(raw.get("dataset_info") or raw.get("dataset") or "-")
+                    "dataset": _dataset_label(
+                        raw.get("dataset_info") or raw.get("dataset")
                     ),
                     "status": str(raw.get("status") or "-"),
                     "duration": duration_str,
@@ -2620,6 +2852,11 @@ class RunDetailState(rx.State):
     # replaced with ``<redacted-path>`` so the operator still sees the
     # run-relative tail but not their username).
     _checkpoint_path: str = "-"
+    # ui-v2 P2: the folder "Export the model" hands to the Export page — a
+    # UI job's <job>/output (where its adapter is saved), else the recorded
+    # checkpoint path. Backend-only; ``can_export_model`` is the public flag.
+    _export_source: str = ""
+    can_export_model: bool = False
 
     # Hyperparameter table — list of {key, value} dicts so Reflex's foreach
     # can render them as table rows without on-template f-strings.
@@ -2804,7 +3041,8 @@ class RunDetailState(rx.State):
                 self.error = _redact_action(f"checkpoints module unavailable: {exc}")
                 return
 
-            manager = RunHistoryManager(str(history_dir))
+            located_dir, job_dir = _locate_run_history_dir(history_dir, self.current_run_id)
+            manager = RunHistoryManager(str(located_dir))
             entry = manager.get_run(self.current_run_id) if self.current_run_id else None
             if entry is None:
                 self.not_found = True
@@ -2813,14 +3051,18 @@ class RunDetailState(rx.State):
                 )
                 return
 
-            # Populate header fields.
-            self.status = str(entry.get("status") or "-")
+            # Populate header fields. A UI job's own record knows a stop
+            # (history says "completed" when training returned normally).
+            self.status = (
+                (_job_status_override(job_dir) if job_dir is not None else None)
+                or str(entry.get("status") or "-")
+            )
             self.model = str(entry.get("model_name") or "-")
             # Re-audit MEDIUM: dataset_info is often an absolute path (trainer
             # records the raw --data arg); redact home-dir/username before it
             # reaches this public, client-serialized var (sibling of UI-A-002).
-            self.dataset = _redact_action(str(entry.get("dataset_info") or "-"))
-            self.started_at = str(entry.get("started_at") or entry.get("timestamp") or "-")
+            self.dataset = _dataset_label(entry.get("dataset_info"))
+            self.started_at = _fmt_started(entry.get("started_at") or entry.get("timestamp"))
             self.completed_at = str(entry.get("completed_at") or "-")
             duration = entry.get("duration_seconds")
             if duration is None:
@@ -2841,6 +3083,15 @@ class RunDetailState(rx.State):
             # UI-A-002: full path into the backend-only var; the client reads
             # the redacted ``checkpoint_path_display`` computed var.
             self._checkpoint_path = str(entry.get("checkpoint_path") or "-")
+            export_source = ""
+            if job_dir is not None and (_Path(str(job_dir)) / "output").is_dir():
+                export_source = str(_Path(str(job_dir)) / "output")
+            elif entry.get("checkpoint_path") and _Path(
+                str(entry["checkpoint_path"])
+            ).expanduser().is_dir():
+                export_source = str(_Path(str(entry["checkpoint_path"])).expanduser())
+            self._export_source = export_source
+            self.can_export_model = bool(export_source)
 
             # Hyperparameter table — flatten the entry dict into {key, value}
             # rows, skipping the fields surfaced as headers above so the
@@ -2875,6 +3126,9 @@ class RunDetailState(rx.State):
                     self.loss_history = []
             else:
                 self.loss_history = []
+            # UI job: the progress events hold the loss curve.
+            if not self.loss_history and job_dir is not None:
+                self.loss_history = _job_loss_curve(job_dir)
 
             # Checkpoint list — walk the checkpoint_path directory.
             self.checkpoints = []
@@ -2906,8 +3160,15 @@ class RunDetailState(rx.State):
             # alongside the checkpoint. Capped at 200 lines (~16 KB) to
             # keep the WS bundle small.
             self.log_lines = []
+            # UI job: the child's stdout/stderr is <job>/output.log.
+            log_candidates = []
+            if job_dir is not None:
+                log_candidates.append(_Path(str(job_dir)) / "output.log")
             if entry.get("checkpoint_path"):
-                log_path = _Path(str(entry["checkpoint_path"])).expanduser() / "training.log"
+                log_candidates.append(
+                    _Path(str(entry["checkpoint_path"])).expanduser() / "training.log"
+                )
+            for log_path in log_candidates:
                 if log_path.exists() and log_path.is_file():
                     try:
                         with open(log_path, encoding="utf-8", errors="replace") as f:
@@ -2916,10 +3177,13 @@ class RunDetailState(rx.State):
                             # paths (checkpoint dir, HF cache, tempdirs) that
                             # carry the operator's home dir + username. Redact
                             # each line before it enters the client-serialized
-                            # ``log_lines`` var.
+                            # ``log_lines`` var. tqdm redraws with \r; keep
+                            # each line's last frame.
                             self.log_lines = [
-                                _redact_action(line.rstrip("\n")) for line in tail
+                                _redact_action(line.rstrip("\n").split("\r")[-1])
+                                for line in tail
                             ]
+                        break
                     except OSError:
                         pass
         finally:
@@ -3037,7 +3301,9 @@ class RunDetailState(rx.State):
                 return
             from .checkpoints import RunHistoryManager
 
-            manager = RunHistoryManager(str(history_dir))
+            manager = RunHistoryManager(
+                str(_locate_run_history_dir(history_dir, self.current_run_id)[0])
+            )
             entry = manager.get_run(self.current_run_id)
             if entry is None:
                 self.action_error = _redact_action(
@@ -3129,7 +3395,9 @@ class RunDetailState(rx.State):
                 return
             from .checkpoints import RunHistoryManager
 
-            manager = RunHistoryManager(str(history_dir))
+            manager = RunHistoryManager(
+                str(_locate_run_history_dir(history_dir, self.current_run_id)[0])
+            )
             deleted = manager.delete_run(self.current_run_id)
             if deleted:
                 self.action_result = f"Run {self.current_run_id} deleted."
@@ -3190,7 +3458,9 @@ class RunDetailState(rx.State):
                 return
             from .checkpoints import RunHistoryManager
 
-            manager = RunHistoryManager(str(history_dir))
+            manager = RunHistoryManager(
+                str(_locate_run_history_dir(history_dir, self.current_run_id)[0])
+            )
             entry = manager.get_run(self.current_run_id)
             if entry is None:
                 self.action_error = _redact_action(
@@ -3229,6 +3499,17 @@ class RunDetailState(rx.State):
             self.action_in_flight = ""
 
     @rx.event
+    def export_model(self):
+        """Open the Export page with this run's adapter as the source (P2)."""
+        if not self._export_source:
+            self.action_error = "This run has no saved adapter folder to export."
+            return None
+        return [
+            ExportState.set_source_model_path(self._export_source),
+            rx.redirect("/export"),
+        ]
+
+    @rx.event
     def clear_action_message(self) -> None:
         """Dismiss the action result / error banner."""
         self.action_result = ""
@@ -3249,6 +3530,45 @@ class RunDetailState(rx.State):
 #   - Total cache size + per-model breakdown
 #   - Last-modified timestamp (proxy for "last used")
 #   - Delete-model affordance (operator confirms before the rm -rf)
+
+
+def _hf_hub_cache_dir():
+    """The Hugging Face hub cache this machine uses (ui-v2 P2).
+
+    Resolved at call time in ``huggingface_hub``'s own order:
+    ``HF_HUB_CACHE`` (or the older ``HUGGINGFACE_HUB_CACHE``), then
+    ``HF_HOME/hub``, then ``XDG_CACHE_HOME/huggingface/hub``, then
+    ``~/.cache/huggingface/hub``. Hard-coding the last one showed the wrong,
+    often near-empty folder on machines that move the cache to a bigger
+    drive.
+    """
+    import os as _os
+    from pathlib import Path as _Path
+
+    for var in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE"):
+        value = _os.environ.get(var, "").strip()
+        if value:
+            return _Path(value).expanduser()
+    hf_home = _os.environ.get("HF_HOME", "").strip()
+    if hf_home:
+        return _Path(hf_home).expanduser() / "hub"
+    xdg = _os.environ.get("XDG_CACHE_HOME", "").strip()
+    if xdg:
+        return _Path(xdg).expanduser() / "huggingface" / "hub"
+    return _Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def _home_relative(path: str) -> str:
+    """``~/...`` for a path under the home directory (hides the username
+    without the literal ``<redacted-path>`` showing up on screen); other
+    paths unchanged."""
+    from pathlib import Path as _Path
+
+    try:
+        rel = _Path(path).resolve().relative_to(_Path.home().resolve())
+    except (OSError, ValueError):
+        return path
+    return "~/" + rel.as_posix() if str(rel) != "." else "~"
 
 
 class ModelsState(rx.State):
@@ -3284,11 +3604,13 @@ class ModelsState(rx.State):
         """Client-facing, redacted form of the HF cache directory (UI-A-002)."""
         if not self._cache_dir:
             return ""
-        return _redact_action(self._cache_dir)
+        # UI-A-002: no username in the UI — a home-relative "~/..." rather
+        # than the literal "<redacted-path>" prefix (ui-v2 P2).
+        return _home_relative(self._cache_dir)
 
     @rx.event
     def load_models(self) -> None:
-        """Walk ``~/.cache/huggingface/hub/`` and populate ``self.models``.
+        """Walk the HF hub cache (``_hf_hub_cache_dir``) and fill ``self.models``.
 
         HF cache layout (per huggingface_hub docs):
             <cache>/models--<owner>--<model>/snapshots/<sha>/<files>
@@ -3298,12 +3620,11 @@ class ModelsState(rx.State):
         recursive sum of all files inside.
         """
         from datetime import datetime, timezone
-        from pathlib import Path as _Path
 
         self.loading = True
         self.error = ""
         try:
-            cache_dir = _Path.home() / ".cache" / "huggingface" / "hub"
+            cache_dir = _hf_hub_cache_dir()
             # UI-A-002: full path into the backend-only var; the client reads
             # the redacted ``cache_dir_display`` computed var.
             self._cache_dir = str(cache_dir)
@@ -3311,9 +3632,9 @@ class ModelsState(rx.State):
                 self.models = []
                 self.total_size_mb = "0"
                 # UI-A-002: ``error`` is a public var; redact the cache path.
-                self.error = _redact_action(
-                    f"No HF cache at {cache_dir}. Models download on first "
-                    "use via `transformers.AutoModel.from_pretrained(...)`."
+                self.error = (
+                    f"No Hugging Face cache at {_home_relative(str(cache_dir))} yet. "
+                    "Models are downloaded there the first time a run uses them."
                 )
                 return
 
@@ -3404,9 +3725,8 @@ class ModelsState(rx.State):
             directories.
         """
         import shutil
-        from pathlib import Path as _Path
 
-        cache_dir = _Path.home() / ".cache" / "huggingface" / "hub"
+        cache_dir = _hf_hub_cache_dir()
         if not dir_name or not dir_name.startswith("models--") or "/" in dir_name or "\\" in dir_name or ".." in dir_name:
             self.error = f"Invalid model directory name: {dir_name!r}"
             return

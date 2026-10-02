@@ -137,16 +137,18 @@ TrainState = [
     # consumed by the loss_chart_data computed var (recharts step/loss/ema rows)
     "ema_history",
     "step_history",
+    # consumed by the job_run_label computed var ("run 2 of 3", ui-v2 P2)
+    "job_runs",
 ]
 
 # MultiRunState — every config field is mirrored from TrainState by
 # design (Reflex's metaclass requires direct declaration, see ui_state.py
-# comment block before `_apply_model`). The multi_run.py page does not
-# yet surface the full config form (Phase 3 Trainer hookup pending), so
-# these fields are populated by setters but read only by future UI.
-# v1.4 cleanup target: either wire the rest of the multi_run.py form or
-# trim the mirrored fields.
+# comment block before `_apply_model`). ui-v2 P2 shows only the fields the
+# multi-run CLI has flags for (model, dataset, runs, steps, samples, merge);
+# the rest (batch size, learning rate, LoRA shape, quantization) wait for the
+# P3 CLI-parity pass, which adds the flags and puts them on the form.
 MultiRunState = [
+    "quantization",
     "dataset_path",
     "dataset_path_error",
     "steps",

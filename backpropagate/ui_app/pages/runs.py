@@ -30,10 +30,11 @@ from __future__ import annotations
 
 import reflex as rx
 
-from backpropagate.ui_state import RunsState
+from backpropagate.ui_state import RunsState, TrainState
 
 from ..chrome import BpFooter, BpHeader, BpLeftNav, BpSideRail
 from ..components.error_callout import BpErrorCallout
+from ..components.job_panel import job_progress_card
 
 
 def _label(text: str) -> rx.Component:
@@ -385,6 +386,8 @@ def runs_page() -> rx.Component:
                         gap="var(--space-2)",
                         width="100%",
                     ),
+                    # ui-v2 P2: the live job (any kind) on top of the history.
+                    job_progress_card(),
                     _filter_bar(),
                     rx.cond(
                         RunsState.error != "",
@@ -462,7 +465,11 @@ def runs_page() -> rx.Component:
                     padding="var(--space-7)",
                     max_width="1320px",
                     width="100%",
-                    on_mount=RunsState.load_runs,
+                    on_mount=[
+                        RunsState.load_runs,
+                        TrainState.refresh_gpu,
+                        TrainState.attach_active_job,
+                    ],
                 ),
                 flex_grow="1",
                 style={"height": "100%"},

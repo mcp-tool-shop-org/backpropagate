@@ -43,6 +43,7 @@ import re
 import secrets
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -733,6 +734,99 @@ def _ui_error_note(writer: object, exc: BaseException, run_dir: str | None = Non
         _ui_job_update(run_dir, status="failed", error_code=str(code))
 
 
+class _UiJob:
+    """State shared between :func:`_run_as_ui_job` and a command body that
+    the web UI started (ui-v2 P2: multi-run, export)."""
+
+    def __init__(self, run_dir: str) -> None:
+        from .job_events import JobEventWriter
+
+        self.run_dir = run_dir
+        self.writer = JobEventWriter(run_dir)
+        self.callback: Any = None  # UiFileEventCallback, when the body trains
+        self.output_path: str | None = None
+        self.steps_done: int = 0
+
+
+_UI_ERROR_CODE_RE = re.compile(r"\[([A-Z][A-Z0-9]*_[A-Z0-9_]+)\]")
+
+
+def _ui_failure_from_log(run_dir: str, exit_code: int) -> tuple[str, str]:
+    """(code, message) for a UI job that returned a failure exit code.
+
+    The command printed its structured error (``[CODE] message``) to stdout,
+    which the job runner sends to ``<run_dir>/output.log``. Read it back
+    rather than threading a writer through every early ``return`` in the
+    command, so the UI shows the same code the terminal would.
+    """
+    fallback = "INPUT_INVALID" if exit_code == EXIT_USER_ERROR else "RUNTIME_ERROR"
+    try:
+        log_path = Path(run_dir) / "output.log"
+        with open(log_path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - 65536))
+            tail = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return fallback, f"Failed with exit code {exit_code}."
+    lines = [ln.strip() for ln in tail.splitlines() if ln.strip()]
+    for line in reversed(lines):
+        match = _UI_ERROR_CODE_RE.search(line)
+        if match:
+            return match.group(1), line[:500]
+    for line in reversed(lines):
+        if "error" in line.lower() or "failed" in line.lower():
+            return fallback, line[:500]
+    return fallback, f"Failed with exit code {exit_code}."
+
+
+def _run_as_ui_job(
+    args: argparse.Namespace,
+    body: Callable[[argparse.Namespace], int],
+    first_phase: str,
+) -> int:
+    """Run a command body, mirroring its outcome into the UI job files.
+
+    Without ``--ui-run-dir`` this is just ``body(args)``. With it, the body
+    sees ``args._ui_job`` (a :class:`_UiJob`), and this records the first
+    phase, then exactly one terminal event: ``done`` (status ``done`` or
+    ``stopped``) or ``error`` (code read back from the command's own output).
+    """
+    run_dir = getattr(args, "ui_run_dir", None)
+    if not run_dir:
+        return body(args)
+    from .job_events import read_stop_request
+
+    job = _UiJob(str(run_dir))
+    args._ui_job = job
+    job.writer.phase(first_phase)
+    try:
+        rc = body(args)
+    except BaseException as exc:
+        _ui_error_note(job.writer, exc, job.run_dir)
+        raise
+    if job.callback is not None:
+        job.steps_done = int(getattr(job.callback, "last_step", None) or 0)
+    stopped = read_stop_request(job.run_dir)
+    if rc in (EXIT_OK, EXIT_PARTIAL_SUCCESS, EXIT_INTERRUPTED):
+        status = "stopped" if (stopped or rc == EXIT_INTERRUPTED) else "done"
+        job.writer.phase("done")
+        job.writer.done(
+            status=status, steps_done=job.steps_done, output_path=job.output_path
+        )
+        _ui_job_update(
+            job.run_dir,
+            status=status,
+            exit_code=rc,
+            output_path=job.output_path or "",
+        )
+    else:
+        code, message = _ui_failure_from_log(job.run_dir, rc)
+        job.writer.error(code=code, message=message)
+        _ui_job_update(job.run_dir, status="failed", error_code=code, exit_code=rc)
+    return rc
+
+
 def cmd_train(args: argparse.Namespace) -> int:
     """
     Execute the train command.
@@ -1137,6 +1231,16 @@ def cmd_train(args: argparse.Namespace) -> int:
 # =============================================================================
 
 def cmd_multi_run(args: argparse.Namespace) -> int:
+    """Execute the multi-run command (see :func:`_cmd_multi_run_body`).
+
+    When the web UI started it (hidden ``--ui-run-dir``), progress, the
+    run-by-run marker, cooperative stop and the outcome are mirrored into
+    the job's files (ui-v2 P2).
+    """
+    return _run_as_ui_job(args, _cmd_multi_run_body, "loading")
+
+
+def _cmd_multi_run_body(args: argparse.Namespace) -> int:
     """
     Execute the multi-run command.
 
@@ -1363,16 +1467,45 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
         def on_run_complete(run_result: RunResult) -> None:
             _print_success(f"Run {run_result.run_index + 1} complete: loss={run_result.final_loss:.4f}")
 
+        # ui-v2 P2: started from the web UI -> one progress bar for the whole
+        # session (runs x steps), a "run N of M" marker per run, and Stop
+        # ends the session after the current run unwinds (abort keeps the
+        # checkpoints already merged).
+        ui_job = getattr(args, "_ui_job", None)
+        ui_trainer_kwargs: dict[str, Any] = {}
+        if ui_job is not None:
+            from .job_events import UiFileEventCallback
+
+            ui_job.callback = UiFileEventCallback(
+                ui_job.run_dir,
+                writer=ui_job.writer,
+                total_steps=int(args.runs) * int(args.steps),
+            )
+
+            def _ui_on_run_start(run_idx: int) -> None:
+                ui_job.callback.step_offset = (int(run_idx) - 1) * int(args.steps)
+                ui_job.writer.run_marker(run_idx, int(args.runs))
+
+            ui_trainer_kwargs = {
+                "extra_callbacks": [ui_job.callback],
+                "on_run_start": _ui_on_run_start,
+            }
+
         trainer = MultiRunTrainer(
             model=args.model,
             config=config,
             on_run_complete=on_run_complete,
             resume_from=getattr(args, "resume", None),  # F-002
             **wave6b_trainer_kwargs,
+            **ui_trainer_kwargs,
         )
+        if ui_job is not None:
+            ui_job.callback.on_stop = trainer.abort
 
         print()
         result = trainer.run(args.data)
+        if ui_job is not None:
+            ui_job.output_path = str(result.final_checkpoint_path or args.output)
 
         print()
         _print_success("Multi-run training complete!")
@@ -1597,6 +1730,16 @@ def _warn_env_token_calibration() -> None:
 # =============================================================================
 
 def cmd_export(args: argparse.Namespace) -> int:
+    """Execute the export command (see :func:`_cmd_export_body`).
+
+    When the web UI started it (hidden ``--ui-run-dir``), the phase and the
+    outcome (output path, or the structured error code) are mirrored into
+    the job's files (ui-v2 P2).
+    """
+    return _run_as_ui_job(args, _cmd_export_body, "exporting")
+
+
+def _cmd_export_body(args: argparse.Namespace) -> int:
     """
     Execute the export command.
 
@@ -1936,6 +2079,9 @@ def cmd_export(args: argparse.Namespace) -> int:
 
         _print_success("Export complete!")
         _print_kv("Path", str(result.path))
+        ui_job = getattr(args, "_ui_job", None)
+        if ui_job is not None:
+            ui_job.output_path = str(result.path)
         _print_kv("Size", f"{result.size_mb:.1f} MB")
         _print_kv("Time", f"{result.export_time_seconds:.1f}s")
 
@@ -1961,6 +2107,8 @@ def cmd_export(args: argparse.Namespace) -> int:
             # spinning disks). Pre-fix the operator saw a single info line
             # then 1-2 minutes of silence — same wedged-tool-vs-working-tool
             # ambiguity that C-CLI-002 closed for the model-load phase.
+            if getattr(args, "_ui_job", None) is not None:
+                args._ui_job.writer.phase("registering")
             _print_info(
                 f"==> Registering with Ollama as '{ollama_name}' "
                 "(blob copy + index; ~15s for 3B, 30s-2min for 7B)..."
@@ -8282,6 +8430,14 @@ Tips:
             "already completed."
         ),
     )
+    # ui-v2 P2: hidden, same contract as `train --ui-run-dir` (the web UI's
+    # job runner passes it; not an operator surface).
+    multi_parser.add_argument(
+        "--ui-run-dir",
+        default=None,
+        metavar="DIR",
+        help=argparse.SUPPRESS,
+    )
     multi_parser.set_defaults(func=cmd_multi_run)
 
     # export command
@@ -8457,6 +8613,14 @@ Quantization tradeoffs (fastest -> smallest):
         "--hub-private",
         action="store_true",
         help="When pairing --push-to-hub, create the repo as private.",
+    )
+    # ui-v2 P2: hidden, same contract as `train --ui-run-dir` (the web UI's
+    # job runner passes it; not an operator surface).
+    export_parser.add_argument(
+        "--ui-run-dir",
+        default=None,
+        metavar="DIR",
+        help=argparse.SUPPRESS,
     )
     export_parser.set_defaults(func=cmd_export)
 

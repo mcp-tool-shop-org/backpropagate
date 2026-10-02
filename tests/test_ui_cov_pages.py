@@ -573,7 +573,7 @@ _PAGE_SPECS = {
     "multi_run": (
         "backpropagate.ui_app.pages.multi_run:multi_run_page",
         {("on_change", f"MultiRunState.set_{f}") for f in (
-            "model", "quantization", "num_runs", "samples_per_run", "merge_mode")}
+            "model", "dataset_path", "steps", "num_runs", "samples_per_run", "merge_mode")}
         | {("on_click", "MultiRunState.start_multi_run")},
     ),
     "export": (
@@ -613,7 +613,7 @@ _PAGE_SPECS = {
 
 _PAGE_COPY = {
     "train": {"HuggingFace model id", "Start training"},
-    "multi_run": {"Multi-run", "Sweep shape", "Merge mode", "Cross-run analysis"},
+    "multi_run": {"Multi-run", "Sweep shape", "Merge mode", "Steps per run", "Start multi-run"},
     "export": {"Source", "GGUF quantization", "Register with Ollama", "Push to HF Hub"},
     "dataset": {"Upload", "Detected format", "Enable dedup", "Min tokens", "Max tokens"},
     "runs": {"Run history", "Could not load run history", "No training runs recorded yet.",

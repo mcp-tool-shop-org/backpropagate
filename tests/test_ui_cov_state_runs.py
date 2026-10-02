@@ -41,6 +41,10 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.delenv("BACKPROPAGATE_UI__OUTPUT_DIR", raising=False)
     monkeypatch.delenv("APPDATA", raising=False)
+    # The Models page follows HF_HOME & co. (ui-v2 P2); keep the cache under
+    # the fake home whatever the machine running the tests has set.
+    for var in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "HF_HOME", "XDG_CACHE_HOME"):
+        monkeypatch.delenv(var, raising=False)
     return SimpleNamespace(
         home=home.resolve(),
         out=(home / ".backpropagate" / "ui-outputs").resolve(),
@@ -329,7 +333,7 @@ class TestRunDetailLoad:
         assert (s.status, s.model, s.duration, s.final_loss) == (
             "completed", "Qwen/Qwen2.5-7B", "12s", "0.1235")
         assert s.completed_at == "2026-09-01T10:05:00"
-        assert "alice" not in s.dataset and "<redacted-path>" in s.dataset  # redacted
+        assert s.dataset == "train.jsonl"  # the file name, no home dir (ui-v2 P2)
         assert s.loss_history == [1.0, 0.5, 1.0]  # non-numeric dropped (bool is an int subclass)
         assert s.loss_chart_data[0] == {"step": 0, "loss": 1.0}
         hp = {row["key"]: row["value"] for row in s.hyperparameters}
@@ -754,7 +758,7 @@ class TestModelsStateLoad:
         s = us.ModelsState()
         s.load_models()
         assert s.models == [] and s.total_size_mb == "0" and s.loading is False
-        assert s.error.startswith("No HF cache at") and str(sandbox.home) not in s.error
+        assert s.error.startswith("No Hugging Face cache at ~/") and str(sandbox.home) not in s.error
         assert s.cache_dir_display and str(sandbox.home) not in s.cache_dir_display
         assert s._cache_dir == str(sandbox.cache)
 

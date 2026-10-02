@@ -605,7 +605,7 @@ class TestMultiRunStateSetters:
 
     def test_merge_mode_allowlist(self):
         s = us.MultiRunState()
-        for mode in ("weighted", "ties", "slao"):
+        for mode in ("simple", "ties", "slao"):
             s.set_merge_mode(mode)
             assert s.merge_mode == mode
         s.set_merge_mode("evil")
@@ -622,13 +622,28 @@ class TestMultiRunStateSetters:
         s.set_replay_fraction("abc")
         assert s.replay_fraction == 0.0 and "number" in s.replay_fraction_error
 
-    def test_start_multi_run_points_at_the_cli_and_appends(self):
+    def test_start_multi_run_hands_a_multi_run_job_to_the_job_state(self, sandbox):
+        """ui-v2 P2: the Start button starts a real job (no CLI pointer)."""
+        sandbox.out.mkdir(parents=True, exist_ok=True)
+        data = sandbox.out / "data.jsonl"
+        data.write_text('{"text": "hi"}\n')
         s = us.MultiRunState()
-        s.events = [{"t": "x", "level": "info", "msg": "prior"}]
-        s.start_multi_run()
-        assert s.run_state == "idle" and s.cli_notice == us._CLI_NOTICE_MULTI_RUN
-        assert [e["msg"] for e in s.events][0] == "prior" and len(s.events) == 2
-        assert "backprop multi-run" in s.events[-1]["msg"]
+        s.set_dataset_path(str(data))
+        s.set_num_runs(2)
+        s.set_steps(15)
+        s.set_merge_mode("ties")
+        spec = s.start_multi_run()
+        assert spec.handler.fn.__name__ == "start_job"
+        payload = str(spec.args[0][1])
+        for expected in ('"multi_run"', '"ties"', "data.jsonl"):
+            assert expected in payload
+
+    def test_start_multi_run_refuses_on_screen_when_a_field_is_invalid(self):
+        s = us.MultiRunState()
+        s.set_num_runs("nope")
+        spec = s.start_multi_run()
+        assert spec.handler.fn.__name__ == "refuse"
+        assert "Fix the highlighted fields" in str(spec.args[0][1])
 
 
 # =============================================================================
@@ -644,11 +659,13 @@ class TestExportStateSetters:
             assert s.format == fmt
         s.set_format("pickle")
         assert s.format == "lora"
-        for q in ("q2_K", "q3_K_M", "q4_K_M", "q5_K_M", "q6_K", "q8_0"):
+        # ui-v2 P2: exactly the `backprop export --quantization` choices.
+        for q in ("f16", "q8_0", "q5_k_m", "q4_k_m", "q4_0", "q2_k"):
             s.set_gguf_quant(q)
             assert s.gguf_quant == q
-        s.set_gguf_quant("q9_9")
-        assert s.gguf_quant == "q8_0"
+        for rejected in ("q9_9", "q3_K_M", "q6_K"):
+            s.set_gguf_quant(rejected)
+            assert s.gguf_quant == "q2_k"
 
     @pytest.mark.parametrize(
         "name",
@@ -684,12 +701,25 @@ class TestExportStateSetters:
         assert (s.ollama_register, s.hub_enabled, s.hub_private, s.hub_include_base) == (
             True, True, False, True)
 
-    def test_start_export_points_at_the_cli_and_appends(self):
+    def test_start_export_hands_an_export_job_to_the_job_state(self):
+        """ui-v2 P2: Export starts a real job; Ollama only rides along on GGUF."""
         s = us.ExportState()
-        s.start_export()
-        s.start_export()
-        assert s.export_state == "idle" and s.cli_notice == us._CLI_NOTICE_EXPORT
-        assert len(s.events) == 2 and "backprop export" in s.events[0]["msg"]
+        s.set_format("gguf")
+        s.set_gguf_quant("q8_0")
+        s.set_ollama_register(True)
+        s.set_ollama_name("my-model")
+        spec = s.start_export()
+        assert spec.handler.fn.__name__ == "start_job"
+        payload = str(spec.args[0][1])
+        for expected in ('"export"', '"gguf"', '"q8_0"', '"my-model"'):
+            assert expected in payload
+        s.set_format("lora")
+        assert '"my-model"' not in str(s.start_export().args[0][1])
+
+    def test_start_export_refuses_on_screen_when_a_field_is_invalid(self):
+        s = us.ExportState()
+        s.set_ollama_name("../escape")
+        assert s.start_export().handler.fn.__name__ == "refuse"
 
 
 class TestExportHubFieldValidation:

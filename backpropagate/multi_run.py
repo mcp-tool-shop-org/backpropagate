@@ -636,6 +636,9 @@ class MultiRunTrainer:
         on_run_complete: Callable[[RunResult], None] | None = None,
         on_step: Callable[[int, int, float], None] | None = None,
         on_gpu_status: Callable[[GPUStatus], None] | None = None,
+        # ui-v2 P2: extra HF TrainerCallbacks installed on every run's inner
+        # SFTTrainer (the web UI's progress / stop-file callback).
+        extra_callbacks: list[Any] | None = None,
     ):
         """
         Initialize multi-run trainer.
@@ -669,6 +672,9 @@ class MultiRunTrainer:
             on_run_complete: Callback when run completes
             on_step: Callback on each step (run_idx, step, loss)
             on_gpu_status: Callback for GPU status updates
+            extra_callbacks: HF ``TrainerCallback`` instances installed on
+                every run's inner ``SFTTrainer`` alongside the abort and
+                on_step bridges (the web UI's progress / stop callback).
 
         Production features (Stage B / Stage C, May 2026):
             - run_id correlation token: minted once per run() call and
@@ -771,6 +777,7 @@ class MultiRunTrainer:
 
         # Callbacks
         self.on_run_start = on_run_start
+        self._extra_callbacks: list[Any] = list(extra_callbacks or [])
         self.on_run_complete = on_run_complete
         self.on_step = on_step
         self.on_gpu_status = on_gpu_status
@@ -2000,7 +2007,7 @@ class MultiRunTrainer:
             _step_cb = _build_multi_run_step_callback(self, run_idx)
             _bridge_callbacks: list[Any] = [
                 cb for cb in (_abort_cb, _step_cb) if cb is not None
-            ]
+            ] + self._extra_callbacks
             sft_callbacks = _bridge_callbacks if _bridge_callbacks else None
 
             trainer = SFTTrainer(

@@ -6,7 +6,7 @@ V1_3_BRIEF / Wave 6b FRONTEND-7. Shows:
 - Per-model dir + size + last-modified
 - Per-model cleanup affordance ("Delete model")
 
-Reads ``~/.cache/huggingface/hub/`` directly via filesystem APIs (no
+Reads the Hugging Face hub cache (HF_HOME-aware) directly via filesystem APIs (no
 ``huggingface_hub`` dep — that lives in optional extras and we want this
 page to render even when only the ``[ui]`` extra is installed).
 
@@ -273,9 +273,9 @@ def models_page() -> rx.Component:
                             },
                         ),
                         rx.text(
-                            "Hugging Face cache inventory. Each entry is a "
-                            "snapshot directory under "
-                            "~/.cache/huggingface/hub/; delete to free disk.",
+                            "Models in the Hugging Face cache this machine uses "
+                            "(it follows HF_HOME). Delete one to free disk; it "
+                            "downloads again the next time a run needs it.",
                             size="2",
                             style={"color": "var(--bp-muted)"},
                         ),

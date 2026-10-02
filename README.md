@@ -255,7 +255,7 @@ pipx install "backpropagate[ui]"
 backprop ui --port 7862
 ```
 
-Open the URL it prints, `http://127.0.0.1:7862/?token=...` (each launch makes a new token; the first start builds the frontend and can take a minute or two). It is a local web interface for browsing datasets, validating formats, and assembling a training config visually. Training itself runs via `backprop train` (UI-driven training is on the roadmap — the Start button currently surfaces that note). The UI is local-only by default. To expose it to other devices, see [Web UI](#web-ui) below for the `--share` + `--auth` security contract.
+Open the URL it prints, `http://127.0.0.1:7862/?token=...` (each launch makes a new token; the first start builds the frontend and can take a minute or two). It is a local web interface for training: start a run, a multi-run sweep or an export, watch it live (steps, loss, time left, GPU temperature and memory), and stop it with a saved checkpoint. Each job runs in its own process, one at a time, and a page reload picks a running job back up. It also previews datasets and lists past runs and the models in your Hugging Face cache. The UI is local-only by default. To expose it to other devices, see [Web UI](#web-ui) below for the `--share` + `--auth` security contract.
 
 ## Multi-run training
 

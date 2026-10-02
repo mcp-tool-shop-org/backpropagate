@@ -114,7 +114,8 @@ class TestRunsTableShowsModelAndDataset:
             "model_name": "m", "dataset_info": "/home/alice/data/train.jsonl"})
         s = us.RunsState()
         s.load_runs()
-        assert "alice" not in s.runs[0]["dataset"] and "<redacted-path>" in s.runs[0]["dataset"]
+        # ui-v2 P2: the dataset's file name, never the home dir / username.
+        assert s.runs[0]["dataset"] == "train.jsonl"
 
     def test_entries_without_the_fields_still_render_dashes(self, sandbox):
         RunHistoryManager(str(sandbox)).record_run({

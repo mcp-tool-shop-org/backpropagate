@@ -38,6 +38,10 @@ Theme = Literal["dark", "light"]
 ActiveSurface = Literal["train", "multi-run", "export", "dataset"]
 ExportFormat = Literal["lora", "merged", "gguf"]
 Quantization = Literal["4-bit", "8-bit", "16-bit"]
+# ui-v2 P3: the training mode picker. qlora = LoRA on a 4-bit base (the CLI
+# default), lora = LoRA on a 16-bit base (--no-4bit), full = --mode full.
+TrainMode = Literal["qlora", "lora", "full"]
+Method = Literal["sft", "orpo", "simpo", "kto"]
 # ui-v2 P2: exactly what the multi-run job maps to CLI flags
 # (slao | simple -> --merge-mode; ties -> --merge-mode slao --merge-strategy ties).
 MergeMode = Literal["slao", "simple", "ties"]
@@ -52,7 +56,8 @@ _LR_MIN, _LR_MAX = 1e-7, 1.0
 _LORA_R_MIN, _LORA_R_MAX = 1, 256
 _LORA_ALPHA_MIN, _LORA_ALPHA_MAX = 1, 512
 _LORA_DROPOUT_MIN, _LORA_DROPOUT_MAX = 0.0, 1.0
-_GPU_TEMP_MIN, _GPU_TEMP_MAX = 40, 110
+_GPU_TEMP_MIN, _GPU_TEMP_MAX = 50, 105  # the CLI's --gpu-max-temp range
+_METHOD_PARAM_MAX = 100.0
 _NUM_RUNS_MIN, _NUM_RUNS_MAX = 1, 100
 _SAMPLES_PER_RUN_MIN, _SAMPLES_PER_RUN_MAX = 1, 1_000_000
 _TOKENS_MIN, _TOKENS_MAX = 0, 1_000_000
@@ -60,7 +65,7 @@ _TOKENS_MIN, _TOKENS_MAX = 0, 1_000_000
 # Comma-separated identifier list (LoRA target modules). The character set is
 # strict on purpose — anything outside it cannot resolve to a real attention
 # module name and the only reason to type it is mistake or injection probe.
-_TARGET_MODULES_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_,\s]*$")
+_TARGET_MODULES_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.,\s]*$")
 
 # W&B run name: same shape that wandb itself accepts.
 _WANDB_RUN_NAME_RE = re.compile(r"^[A-Za-z0-9._\-]+$")
@@ -614,6 +619,8 @@ def _apply_target_modules(value: str) -> tuple[str | None, str]:
     if not value or not value.strip():
         return "", ""
     cleaned = value.strip()
+    if cleaned.lower() == "all-linear":
+        return "all-linear", ""
     if not _TARGET_MODULES_RE.match(cleaned):
         return None, (
             "Target modules: only letters, digits, underscore, comma, "
@@ -656,6 +663,139 @@ def _read_log_tail(log_path: str, n: int = 20) -> list[str]:
     return [ln[:300] for ln in lines if ln.strip()][-n:]
 
 
+# ---- ui-v2 P3: presets, LoRA shapes, methods, the VRAM estimate ----------------
+
+#: LoRA shape quick picks: (rank, alpha, target modules). Exactly
+#: ``config.LORA_PRESETS`` -- "quality" is the CLI default.
+LORA_SHAPES: dict[str, tuple[int, int, str]] = {
+    "quality": (256, 512, "all-linear"),
+    "fast": (16, 32, "q_proj, v_proj"),
+}
+
+#: Method knob defaults (the config defaults the CLI falls back to).
+METHOD_DEFAULTS: dict[str, float] = {
+    "orpo_beta": 0.1,
+    "simpo_beta": 2.0,
+    "simpo_gamma": 1.0,
+    "kto_beta": 0.1,
+    "kto_desirable_weight": 1.0,
+    "kto_undesirable_weight": 1.0,
+}
+_METHOD_KEYS: dict[str, tuple[str, ...]] = {
+    "sft": (),
+    "orpo": ("orpo_beta",),
+    "simpo": ("simpo_beta", "simpo_gamma"),
+    "kto": ("kto_beta", "kto_desirable_weight", "kto_undesirable_weight"),
+}
+
+#: What each method needs in the dataset (shown under the Dataset path).
+METHOD_DATA_HINTS: dict[str, str] = {
+    "sft": "Conversations or instructions. Format detected from contents: "
+    "Alpaca, ShareGPT, OpenAI or raw JSONL.",
+    "orpo": "Preference pairs: each row has prompt, chosen and rejected.",
+    "simpo": "Preference pairs: each row has prompt, chosen and rejected.",
+    "kto": "Unpaired feedback: each row has prompt, completion and a true/false label.",
+}
+
+
+def model_preset_options() -> list[dict[str, str]]:
+    """The model presets for the "Start from" picker (``config.MODEL_PRESETS``)."""
+    try:
+        from .config import MODEL_PRESETS
+    except Exception:  # noqa: BLE001 -- config import failure: custom only
+        return []
+    out: list[dict[str, str]] = []
+    for key, p in MODEL_PRESETS.items():
+        label = str(p.description).split(" — ")[0].strip() or p.model_id
+        note = f"{p.best_for} License: {p.license}."
+        restriction = getattr(p, "license_restriction", None)
+        if restriction:
+            note += " " + str(restriction).strip()
+        out.append(
+            {
+                "key": key,
+                "label": label,
+                "model_id": p.model_id,
+                "lora_r": str(p.recommended_lora_r),
+                "note": note,
+            }
+        )
+    return out
+
+
+def _preset_for_model(model: str) -> str:
+    for opt in model_preset_options():
+        if opt["model_id"].lower() == (model or "").strip().lower():
+            return opt["key"]
+    return "custom"
+
+
+def _lora_shape_of(r: int, alpha: int, targets: str) -> str:
+    for name, (sr, sa, st) in LORA_SHAPES.items():
+        if (r, alpha, targets) == (sr, sa, st):
+            return name
+    return "custom"
+
+
+def _training_spec_fields(form) -> dict:
+    """JobSpec fields shared by the Single run and Multi-run forms.
+
+    ``form`` is a TrainState / MultiRunState (same field names). Every value
+    maps to a real CLI flag (ui_jobs._training_flags).
+    """
+    mode = str(form.train_mode)
+    method = str(form.method)
+    fields: dict = {
+        "model": form.model,
+        "dataset_path": form.dataset_path,
+        "steps": int(form.steps),
+        "batch": str(form.batch_size),
+        "lr": float(form.learning_rate),
+        "lora_r": int(form.lora_r),
+        "mode": "full" if mode == "full" else "lora",
+        "base_4bit": mode != "lora",
+        "method": method,
+        "method_params": {k: float(getattr(form, k)) for k in _METHOD_KEYS.get(method, ())},
+        "run_name": str(form.wandb_run_name or ""),
+        "gpu_max_temp": float(form.gpu_temp_threshold),
+        "gradient_checkpointing": bool(form.gradient_checkpointing),
+    }
+    if mode != "full":
+        fields["lora_alpha"] = int(form.lora_alpha)
+        fields["lora_dropout"] = float(form.lora_dropout)
+        fields["target_modules"] = str(form.target_modules).replace(" ", "")
+    return fields
+
+
+def _form_errors(form) -> list[str]:
+    return [
+        err
+        for err in (
+            form.model_error,
+            form.dataset_path_error,
+            form.steps_error,
+            form.batch_size_error,
+            form.learning_rate_error,
+            form.lora_r_error,
+            form.lora_alpha_error,
+            form.lora_dropout_error,
+            form.target_modules_error,
+            form.method_param_error,
+            form.gpu_temp_threshold_error,
+            form.wandb_run_name_error,
+        )
+        if err
+    ]
+
+
+VRAM_VERDICT_TITLES = {
+    "fits": "Fits",
+    "tight": "Tight",
+    "wont_fit": "Won't fit",
+    "unknown": "No estimate",
+}
+
+
 class TrainState(rx.State):
     """Train surface state: config + live run progress.
 
@@ -666,6 +806,10 @@ class TrainState(rx.State):
     """
 
     # ---- Configuration form ------------------------------------------------
+    # ui-v2 P3: defaults are the CLI's (`backprop train` with no flags):
+    # Qwen 2.5 7B, QLoRA, SFT, the "quality" LoRA shape (r 256, alpha 512,
+    # all linear layers).
+    preset: str = "qwen2.5-7b"
     model: str = "Qwen/Qwen2.5-7B-Instruct"
     model_error: str = ""
     dataset_path: str = ""
@@ -676,23 +820,39 @@ class TrainState(rx.State):
     batch_size_error: str = ""
     learning_rate: float = 2e-4
     learning_rate_error: str = ""
-    lora_r: int = 16
+    lora_r: int = 256
     lora_r_error: str = ""
-    lora_alpha: int = 32
+    lora_alpha: int = 512
     lora_alpha_error: str = ""
     lora_dropout: float = 0.05
     lora_dropout_error: str = ""
-    target_modules: str = "q_proj, k_proj, v_proj, o_proj"
+    target_modules: str = "all-linear"
     target_modules_error: str = ""
-    quantization: Quantization = "4-bit"
+    train_mode: TrainMode = "qlora"
+    method: Method = "sft"
+    orpo_beta: float = 0.1
+    simpo_beta: float = 2.0
+    simpo_gamma: float = 1.0
+    kto_beta: float = 0.1
+    kto_desirable_weight: float = 1.0
+    kto_undesirable_weight: float = 1.0
+    method_param_error: str = ""
 
     # ---- Advanced flags ----------------------------------------------------
-    gpu_temp_threshold: int = 85
+    # --gpu-max-temp: stop and save when the GPU stays above this.
+    gpu_temp_threshold: int = 90
     gpu_temp_threshold_error: str = ""
     wandb_run_name: str = ""
     wandb_run_name_error: str = ""
     gradient_checkpointing: bool = True
-    flash_attention: bool = True
+
+    # ---- Inline VRAM estimate (P3; `backprop estimate-vram` numbers) --------
+    vram_est_verdict: str = "unknown"
+    vram_est_total: float = 0.0
+    vram_est_batch: int = 0
+    vram_est_note: str = ""
+    # Why the last run stopped when the GPU temperature limit tripped.
+    job_safety_reason: str = ""
 
     # ---- Live run progress -------------------------------------------------
     run_state: RunState = "idle"
@@ -791,6 +951,61 @@ class TrainState(rx.State):
     def form_disabled(self) -> bool:
         """True while a run is active — config fields lock during training."""
         return self.run_state == "active"
+
+    @rx.var
+    def lora_shape(self) -> str:
+        """quality | fast | custom, from the current rank / alpha / targets."""
+        return _lora_shape_of(self.lora_r, self.lora_alpha, self.target_modules)
+
+    @rx.var
+    def preset_note(self) -> str:
+        for opt in model_preset_options():
+            if opt["key"] == self.preset:
+                return opt["note"]
+        return "Any Hugging Face model id (org/name) or a local model folder."
+
+    @rx.var
+    def method_data_hint(self) -> str:
+        return METHOD_DATA_HINTS.get(self.method, METHOD_DATA_HINTS["sft"])
+
+    @rx.var
+    def is_full_ft(self) -> bool:
+        return self.train_mode == "full"
+
+    @rx.var
+    def vram_est_title(self) -> str:
+        return VRAM_VERDICT_TITLES.get(self.vram_est_verdict, "No estimate")
+
+    @rx.var
+    def vram_est_label(self) -> str:
+        """"15.4 GB of 31.8 GB" (both GiB, like `backprop estimate-vram`)."""
+        if self.vram_est_total <= 0:
+            return ""
+        if self.vram_total_gb > 0:
+            return f"{self.vram_est_total:.1f} GB of {self.vram_total_gb:.1f} GB"
+        return f"{self.vram_est_total:.1f} GB"
+
+    @rx.var
+    def vram_est_pct(self) -> str:
+        if self.vram_est_total <= 0 or self.vram_total_gb <= 0:
+            return "0%"
+        return f"{min(100.0, 100.0 * self.vram_est_total / self.vram_total_gb):.1f}%"
+
+    @rx.var
+    def vram_est_detail(self) -> str:
+        if self.vram_est_note:
+            return self.vram_est_note
+        batch = (
+            f"batch auto picks {self.vram_est_batch} on this card"
+            if self.batch_size == "auto" and self.vram_est_batch
+            else f"batch {self.vram_est_batch}"
+        )
+        advice = {
+            "fits": "",
+            "tight": " Close to the limit: lower the batch or the LoRA rank if it runs out of memory.",
+            "wont_fit": " Try QLoRA, a smaller model, or a lower batch or LoRA rank.",
+        }.get(self.vram_est_verdict, "")
+        return f"Estimate for {batch}, 2,048-token sequences.{advice}"
 
     @rx.var
     def vram_fill_pct(self) -> str:
@@ -906,8 +1121,62 @@ class TrainState(rx.State):
     # ---- Setters (FRONTEND-A-002 + FRONTEND-B-002) -------------------------
 
     @rx.event
-    def set_model(self, value: str) -> None:
+    def set_model(self, value: str):
         self.model, self.model_error = _apply_model(value)
+        self.preset = _preset_for_model(self.model)
+        return TrainState.refresh_estimate
+
+    @rx.event
+    def set_preset(self, key: str):
+        """Fill the model and its recommended LoRA rank (alpha = 2 x rank)."""
+        for opt in model_preset_options():
+            if opt["key"] == key:
+                self.preset = key
+                self.model, self.model_error = opt["model_id"], ""
+                self.lora_r = int(opt["lora_r"])
+                self.lora_alpha = 2 * self.lora_r
+                self.lora_r_error = self.lora_alpha_error = ""
+                return TrainState.refresh_estimate
+        self.preset = "custom"
+
+    @rx.event
+    def set_train_mode(self, value: str):
+        if value not in ("qlora", "lora", "full"):
+            return
+        if value == "full" and self.method != "sft":
+            self.job_refusal = (
+                f"{self.method.upper()} trains a LoRA adapter; switch the method "
+                "to SFT for full fine-tuning."
+            )
+            return
+        self.train_mode = value  # type: ignore[assignment]
+        return TrainState.refresh_estimate
+
+    @rx.event
+    def set_method(self, value: str) -> None:
+        if value not in _METHOD_KEYS:
+            return
+        self.method = value  # type: ignore[assignment]
+        self.method_param_error = ""
+        if value != "sft" and self.train_mode == "full":
+            self.train_mode = "qlora"
+
+    @rx.event
+    def set_method_param(self, key: str, value: str | float) -> None:
+        if key not in METHOD_DEFAULTS:
+            return
+        f, err = _clamp_float(key.replace("_", " "), value, 1e-6, _METHOD_PARAM_MAX)
+        if f is not None:
+            setattr(self, key, f)
+        self.method_param_error = err
+
+    @rx.event
+    def apply_lora_shape(self, shape: str):
+        if shape not in LORA_SHAPES:
+            return
+        self.lora_r, self.lora_alpha, self.target_modules = LORA_SHAPES[shape]
+        self.lora_r_error = self.lora_alpha_error = self.target_modules_error = ""
+        return TrainState.refresh_estimate
 
     @rx.event
     def set_dataset_path(self, value: str) -> None:
@@ -921,11 +1190,12 @@ class TrainState(rx.State):
         self.steps_error = err
 
     @rx.event
-    def set_batch_size(self, value: str) -> None:
+    def set_batch_size(self, value: str):
         new, err = _apply_batch_size(value)
         if new is not None:
             self.batch_size = new
         self.batch_size_error = err
+        return TrainState.refresh_estimate
 
     @rx.event
     def set_learning_rate(self, value: str | float) -> None:
@@ -935,11 +1205,41 @@ class TrainState(rx.State):
         self.learning_rate_error = err
 
     @rx.event
-    def set_lora_r(self, value: str | int) -> None:
+    def set_lora_r(self, value: str | int):
         n, err = _clamp_int("LoRA rank", value, _LORA_R_MIN, _LORA_R_MAX)
         if n is not None:
             self.lora_r = n
         self.lora_r_error = err
+        return TrainState.refresh_estimate
+
+    @rx.event(background=True)
+    async def refresh_estimate(self):
+        """Recompute the inline VRAM estimate off the event loop (the
+        estimator's first import loads the trainer module)."""
+        import asyncio
+
+        from .ui_jobs import vram_verdict
+
+        async with self:
+            args = (
+                self.model,
+                "full" if self.train_mode == "full" else "lora",
+                int(self.lora_r),
+                str(self.batch_size),
+                self.train_mode != "lora",
+                float(self.vram_total_gb or 0.0),
+            )
+        result = await asyncio.to_thread(
+            lambda: vram_verdict(
+                args[0], mode=args[1], lora_r=args[2], batch=args[3],
+                base_4bit=args[4], card_gb=args[5],
+            )
+        )
+        async with self:
+            self.vram_est_verdict = str(result.get("verdict") or "unknown")
+            self.vram_est_total = float(result.get("total_gb") or 0.0)
+            self.vram_est_batch = int(result.get("batch") or 0)
+            self.vram_est_note = str(result.get("note") or "")
 
     @rx.event
     def set_lora_alpha(self, value: str | int) -> None:
@@ -965,11 +1265,6 @@ class TrainState(rx.State):
         self.target_modules_error = err
 
     @rx.event
-    def set_quantization(self, value: str) -> None:
-        if value in ("4-bit", "8-bit", "16-bit"):
-            self.quantization = value  # type: ignore[assignment]
-
-    @rx.event
     def set_gpu_temp_threshold(self, value: str | int) -> None:
         n, err = _clamp_int(
             "GPU temp threshold", value, _GPU_TEMP_MIN, _GPU_TEMP_MAX
@@ -988,10 +1283,6 @@ class TrainState(rx.State):
     @rx.event
     def set_gradient_checkpointing(self, value: bool) -> None:
         self.gradient_checkpointing = bool(value)
-
-    @rx.event
-    def set_flash_attention(self, value: bool) -> None:
-        self.flash_attention = bool(value)
 
     # ---- Live-run plumbing (ui-v2 P1) -----------------------------------------
     # Populated by the background poller from the job's events.jsonl. The job
@@ -1087,35 +1378,13 @@ class TrainState(rx.State):
         from .ui_jobs import JobSpec
 
         self.job_refusal = ""
-        form_errors = [
-            err
-            for err in (
-                self.model_error,
-                self.dataset_path_error,
-                self.steps_error,
-                self.batch_size_error,
-                self.learning_rate_error,
-                self.lora_r_error,
-            )
-            if err
-        ]
+        form_errors = _form_errors(self)
         if form_errors:
             self.job_refusal = "Fix the highlighted fields first: " + "; ".join(form_errors)
             return
-        # ui-v2 P1: the CLI's train subcommand exposes --mode lora|full and
-        # the 4-bit base quantization is the trainer default (QLoRA-style).
-        # The UI's quantization selector has no CLI twin yet — P3 CLI parity
-        # item (see PR body). P1 always runs the default LoRA-mode path.
-        spec = JobSpec(
-            kind="sft",
-            model=self.model,
-            dataset_path=self.dataset_path,
-            steps=int(self.steps),
-            batch=str(self.batch_size),
-            lr=float(self.learning_rate),
-            lora_r=int(self.lora_r),
-            mode="lora",
-        )
+        # ui-v2 P3: every field maps to a real `backprop train` flag
+        # (ui_jobs._training_flags); the form shows the CLI's defaults.
+        spec = JobSpec(kind="sft", **_training_spec_fields(self))
         return self._begin_job(spec)
 
     @rx.event
@@ -1170,6 +1439,7 @@ class TrainState(rx.State):
         self.job_error_hint = ""
         self.job_output_path = ""
         self.job_log_tail = []
+        self.job_safety_reason = ""
         self.job_stalled = False
         self.run_state = "active"
         self.current_step = 0
@@ -1376,6 +1646,14 @@ class TrainState(rx.State):
             temp = row.get("temp_c")
             if isinstance(temp, (int, float)) and temp:
                 self.gpu_temp = float(temp)
+        elif kind == "safety":
+            # --gpu-max-temp tripped: the child saves and stops (same path as
+            # the Stop button). Shown in the feed and in the stopped label.
+            self.job_safety_reason = str(row.get("reason") or "GPU temperature limit reached")
+            self.events = [
+                *self.events,
+                {"t": _ts_now(), "level": "warn", "msg": self.job_safety_reason},
+            ]
         elif kind == "run":
             self.job_run = int(row.get("run") or 0)
             self.job_runs = int(row.get("runs") or self.job_runs or 0)
@@ -1486,6 +1764,11 @@ class TrainState(rx.State):
                 "crashed": "The training process died unexpectedly (crashed).",
             }
         label = labels.get(outcome, outcome)
+        if outcome == "stopped" and self.job_safety_reason and self.job_kind != "export":
+            label = (
+                f"Stopped by the GPU temperature limit ({self.job_safety_reason}). "
+                "The checkpoint was saved."
+            )
         self.events = [
             *self.events,
             {
@@ -1547,7 +1830,8 @@ class MultiRunState(rx.State):
     setter logic routes through the same module-level helpers.
     """
 
-    # ---- Configuration form (mirrors TrainState) ---------------------------
+    # ---- Configuration form (mirrors TrainState; CLI defaults) -------------
+    preset: str = "qwen2.5-7b"
     model: str = "Qwen/Qwen2.5-7B-Instruct"
     model_error: str = ""
     dataset_path: str = ""
@@ -1558,15 +1842,28 @@ class MultiRunState(rx.State):
     batch_size_error: str = ""
     learning_rate: float = 2e-4
     learning_rate_error: str = ""
-    lora_r: int = 16
+    lora_r: int = 256
     lora_r_error: str = ""
-    lora_alpha: int = 32
+    lora_alpha: int = 512
     lora_alpha_error: str = ""
     lora_dropout: float = 0.05
     lora_dropout_error: str = ""
-    target_modules: str = "q_proj, k_proj, v_proj, o_proj"
+    target_modules: str = "all-linear"
     target_modules_error: str = ""
-    quantization: Quantization = "4-bit"
+    train_mode: TrainMode = "qlora"
+    method: Method = "sft"
+    orpo_beta: float = 0.1
+    simpo_beta: float = 2.0
+    simpo_gamma: float = 1.0
+    kto_beta: float = 0.1
+    kto_desirable_weight: float = 1.0
+    kto_undesirable_weight: float = 1.0
+    method_param_error: str = ""
+    gpu_temp_threshold: int = 90
+    gpu_temp_threshold_error: str = ""
+    wandb_run_name: str = ""
+    wandb_run_name_error: str = ""
+    gradient_checkpointing: bool = True
 
     # ---- Multi-Run specific ------------------------------------------------
     num_runs: int = 3
@@ -1588,6 +1885,66 @@ class MultiRunState(rx.State):
     @rx.event
     def set_model(self, value: str) -> None:
         self.model, self.model_error = _apply_model(value)
+        self.preset = _preset_for_model(self.model)
+
+    @rx.event
+    def set_preset(self, key: str) -> None:
+        """Fill the model and its recommended LoRA rank (alpha = 2 x rank)."""
+        for opt in model_preset_options():
+            if opt["key"] == key:
+                self.preset = key
+                self.model, self.model_error = opt["model_id"], ""
+                self.lora_r = int(opt["lora_r"])
+                self.lora_alpha = 2 * self.lora_r
+                self.lora_r_error = self.lora_alpha_error = ""
+                return
+        self.preset = "custom"
+
+    @rx.event
+    def set_train_mode(self, value: str) -> None:
+        # A multi-run merges LoRA adapters: QLoRA or LoRA, never full.
+        if value in ("qlora", "lora"):
+            self.train_mode = value  # type: ignore[assignment]
+
+    @rx.event
+    def set_method(self, value: str) -> None:
+        if value in _METHOD_KEYS:
+            self.method = value  # type: ignore[assignment]
+            self.method_param_error = ""
+
+    @rx.event
+    def set_method_param(self, key: str, value: str | float) -> None:
+        if key not in METHOD_DEFAULTS:
+            return
+        f, err = _clamp_float(key.replace("_", " "), value, 1e-6, _METHOD_PARAM_MAX)
+        if f is not None:
+            setattr(self, key, f)
+        self.method_param_error = err
+
+    @rx.event
+    def apply_lora_shape(self, shape: str) -> None:
+        if shape in LORA_SHAPES:
+            self.lora_r, self.lora_alpha, self.target_modules = LORA_SHAPES[shape]
+            self.lora_r_error = self.lora_alpha_error = self.target_modules_error = ""
+
+    @rx.var
+    def lora_shape(self) -> str:
+        return _lora_shape_of(self.lora_r, self.lora_alpha, self.target_modules)
+
+    @rx.var
+    def preset_note(self) -> str:
+        for opt in model_preset_options():
+            if opt["key"] == self.preset:
+                return opt["note"]
+        return "Any Hugging Face model id (org/name) or a local model folder."
+
+    @rx.var
+    def method_data_hint(self) -> str:
+        return METHOD_DATA_HINTS.get(self.method, METHOD_DATA_HINTS["sft"])
+
+    @rx.var
+    def is_full_ft(self) -> bool:
+        return False
 
     @rx.event
     def set_dataset_path(self, value: str) -> None:
@@ -1645,9 +2002,24 @@ class MultiRunState(rx.State):
         self.target_modules_error = err
 
     @rx.event
-    def set_quantization(self, value: str) -> None:
-        if value in ("4-bit", "8-bit", "16-bit"):
-            self.quantization = value  # type: ignore[assignment]
+    def set_gpu_temp_threshold(self, value: str | int) -> None:
+        n, err = _clamp_int(
+            "GPU temp threshold", value, _GPU_TEMP_MIN, _GPU_TEMP_MAX
+        )
+        if n is not None:
+            self.gpu_temp_threshold = n
+        self.gpu_temp_threshold_error = err
+
+    @rx.event
+    def set_wandb_run_name(self, value: str) -> None:
+        new, err = _apply_wandb_run_name(value)
+        if new is not None:
+            self.wandb_run_name = new
+        self.wandb_run_name_error = err
+
+    @rx.event
+    def set_gradient_checkpointing(self, value: bool) -> None:
+        self.gradient_checkpointing = bool(value)
 
     @rx.event
     def set_num_runs(self, value: str | int) -> None:
@@ -1685,26 +2057,16 @@ class MultiRunState(rx.State):
         then applies the server-side checks (sandbox, caps, one job at a
         time) and TrainState follows the job like any other.
         """
-        errors = [
-            err
-            for err in (
-                self.model_error,
-                self.dataset_path_error,
-                self.steps_error,
-                self.num_runs_error,
-                self.samples_per_run_error,
-            )
-            if err
+        errors = _form_errors(self) + [
+            err for err in (self.num_runs_error, self.samples_per_run_error) if err
         ]
         if errors:
             return TrainState.refuse("Fix the highlighted fields first: " + "; ".join(errors))
         return TrainState.start_job(
             {
                 "kind": "multi_run",
-                "model": self.model,
-                "dataset_path": self.dataset_path,
+                **_training_spec_fields(self),
                 "runs": int(self.num_runs),
-                "steps": int(self.steps),
                 "samples": int(self.samples_per_run),
                 "merge": str(self.merge_mode),
             }

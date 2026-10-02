@@ -302,6 +302,34 @@ code, pre, .mono {
   background: var(--bp-surface-2);
 }
 
+/* Choice cards (ui-v2 P3): a radio option as a selectable card. The whole
+   card is the label, so clicking anywhere picks it; the checked card takes
+   the teal edge, the focused radio's card shows the focus ring. */
+.bp-choice {
+  display: block;
+  padding: 12px 14px;
+  background: var(--bp-surface-2);
+  border: 1px solid var(--bp-border);
+  border-radius: var(--bp-r-md);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.bp-choice:hover {
+  border-color: var(--bp-border-2);
+}
+.bp-choice:has([data-state="checked"]) {
+  border-color: var(--bp-teal);
+  background: color-mix(in srgb, var(--bp-teal) 10%, var(--bp-surface-2));
+}
+.bp-choice:has(:focus-visible) {
+  box-shadow: var(--bp-focus);
+}
+.bp-choice:has([data-disabled]) {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 /* WCAG 2.4.7 — preserve focus rings for keyboard users.
    Tailored after the Stage C theme.py contract; this stays so accessibility
    audits keep passing across the framework migration. */

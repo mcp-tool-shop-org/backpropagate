@@ -1894,6 +1894,7 @@ class MultiRunTrainer:
         from .trainer import (
             _apply_train_on_responses_only,
             _build_sft_config,
+            _keep_batches_rectangular,
         )
 
         run_start = time.time()
@@ -2041,6 +2042,13 @@ class MultiRunTrainer:
                 gradient_checkpointing=getattr(
                     self._trainer, "_gradient_checkpointing_override", None
                 ),
+            )
+            # No flash-attention / xFormers: rectangular batches (see the
+            # helper's docstring; same rule as single-run training).
+            _keep_batches_rectangular(
+                training_args,
+                self._trainer._model,
+                unsloth_loaded=bool(self._trainer.use_unsloth),
             )
 
             # BACKEND-F-001: wire the abort callback into the inner

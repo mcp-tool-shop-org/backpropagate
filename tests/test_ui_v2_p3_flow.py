@@ -219,6 +219,7 @@ def test_p3_new_controls_reach_the_run(ui):
         page.get_by_label("GPU temperature limit in Celsius (stop and save above this)").fill("95")
         cli_total = _cli_estimate(
             "meta-llama/Llama-3.2-1B-Instruct", "--lora-r", "16", "--batch-size", "2",
+            "--target-modules", "q_proj,v_proj",
             "--no-4bit",
         )
 

@@ -516,7 +516,12 @@ class TestEstimateVRAM:
         assert est.total_gb == pytest.approx(expected_total, rel=1e-6)
 
     def test_quantized_base_reduces_weights(self):
-        """nf4 quantization (the trainer default) reduces model_weights_gb 4x."""
+        """A 4-bit base (the trainer default) is well under the 16-bit weights.
+
+        Measured on the RTX 5090: about half, not a quarter (Qwen2.5-7B loads
+        at 6.7 GiB in 4-bit vs 14.2 GiB in 16-bit), because the embeddings
+        stay 16-bit and Unsloth's dynamic 4-bit keeps some layers unquantized.
+        """
         from backpropagate.trainer import estimate_vram
 
         quantized = estimate_vram(
@@ -529,8 +534,7 @@ class TestEstimateVRAM:
             bytes_per_param=2,
         )
 
-        # nf4=0.5 bytes vs bf16=2 bytes → 4x reduction.
-        assert quantized.model_weights_gb < unquantized.model_weights_gb * 0.3
+        assert quantized.model_weights_gb < unquantized.model_weights_gb * 0.55
 
     def test_lora_mode_includes_adapter_gb(self):
         """mode='lora' produces a non-zero lora_adapter_gb line."""

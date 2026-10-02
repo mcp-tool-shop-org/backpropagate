@@ -1141,6 +1141,27 @@ def _params_from_config(cfg: dict[str, Any]) -> float | None:
     return (layers * (attn + mlp) + embed) / 1e9
 
 
+def _varlen_attention_installed() -> bool:
+    """True when flash-attention, or a usable xFormers, is installed.
+
+    Mirrors what training will find: flash-attn has no Windows build, and the
+    trainer disables xFormers where ``settings.windows.xformers_disabled``
+    applies (RTX 40/50 on Windows).
+    """
+    import importlib.util
+
+    try:
+        if importlib.util.find_spec("flash_attn") is not None:
+            return True
+        if os.environ.get("XFORMERS_DISABLED", "").strip() in {"1", "true", "True"}:
+            return False
+        if os.name == "nt" and getattr(settings.windows, "xformers_disabled", False):
+            return False
+        return importlib.util.find_spec("xformers") is not None
+    except Exception:  # noqa: BLE001 - detection only
+        return False
+
+
 def _enforce_full_ft_param_ceiling(
     model_id: str,
     *,
@@ -1328,18 +1349,41 @@ def estimate_vram(
     hidden_dim: int | None = None,  # None: the model's config, else its size class
     num_layers: int | None = None,
     num_heads: int | None = None,
-    overhead_fraction: float = 0.15,
+    overhead_fraction: float = 0.08,  # allocator slack over the peak (measured ~6%)
     param_count_billions: float | None = None,
     offload: bool = False,
-    vocab_size: int | None = None,  # offload VRAM model only; None: config, else 152064
+    vocab_size: int | None = None,  # None: the model's config, else 152064
     gradient_checkpointing: bool = True,  # the trainer default in both modes
+    target_modules: str | list[str] | None = None,  # None: all-linear (the default)
+    varlen_attention: bool | None = None,  # None: detect flash-attn / xFormers
 ) -> VRAMEstimate:
     """v1.4 BACKEND-F-002: pre-flight VRAM estimator.
 
     Returns a structured estimate before ``.train()`` so an operator can
-    ask "will this config OOM?" instead of finding out at first OOM. The
-    math is back-of-envelope (15% overhead margin); accuracy is within
-    ~10-20% of empirical peak for well-known training configs.
+    ask "will this config OOM?" instead of finding out at first OOM.
+
+    The cost model is fitted to measured peaks (RTX 5090, torch 2.10,
+    transformers 5.5, unsloth 2026.5; 22 probes over six models from 135M to
+    7B, batch 1-8, 1024-4096 token rows, rank 16 and 256). On those probes it
+    is within about 10% of the measured peak, and within 2% on most:
+
+    * weights: 2 bytes/param in 16-bit; in 4-bit the embeddings stay 16-bit
+      and the rest costs ~0.7 bytes/param (Unsloth's dynamic 4-bit keeps some
+      layers in 16-bit);
+    * LoRA adapter: 4 bytes per trainable param, plus ~6.3 bytes per trainable
+      param while training (gradients + optimizer state);
+    * per row, with gradient checkpointing: one layer's attention scores,
+      ``16 * heads * seq^2`` bytes, when attention runs through PyTorch SDPA
+      (no flash-attention / xFormers, i.e. every Windows install), or the
+      fp32 logits ``4 * vocab * seq`` bytes if larger; plus ``35 * hidden *
+      seq`` bytes of activations. Without gradient checkpointing every
+      layer's attention is kept (``* num_layers``);
+    * full fine-tuning: 2 bytes/param of weights plus ~3 bytes/param for
+      gradients and the 8-bit optimizer, and the logits + activations per
+      row (measured on one model; treat as a guide).
+
+    A different GPU, driver or attention backend shifts these numbers; they
+    are an estimate, not a measurement.
 
     Args:
         model: Model identifier — preset name or HF id. Used to estimate
@@ -1363,8 +1407,14 @@ def estimate_vram(
             otherwise from the typical shape of its size class
             (``_SHAPE_BY_SIZE``; 7B-class = 4096 / 32 / 32).
         gradient_checkpointing: True (the trainer default, LoRA and full)
-            stores activations for ~sqrt(num_layers) layers; False
-            (``--no-gradient-checkpointing``, LoRA only) for every layer.
+            keeps one layer's attention at a time; False
+            (``--no-gradient-checkpointing``, LoRA only) keeps every layer's.
+        target_modules: LoRA targets, ``"all-linear"`` (default) or a list /
+            comma-separated names; sizes the adapter.
+        varlen_attention: whether a variable-length attention kernel
+            (flash-attention, or xFormers on the Unsloth path) is in use, in
+            which case the quadratic attention term is dropped. None detects
+            what this machine has installed.
         overhead_fraction: Fragmentation + framework overhead (default 15%).
         param_count_billions: Optional explicit parameter count. When
             None, estimated via :func:`_estimate_param_count_billions`.
@@ -1385,12 +1435,13 @@ def estimate_vram(
         if None in (hidden_dim, num_layers, num_heads, vocab_size, param_count_billions)
         else None
     )
-    if param_count_billions is None:
-        param_count_billions = _estimate_param_count_billions(model)
     if param_count_billions is None and cfg is not None:
+        # The model's own shape beats the size in its name ("7B" is 7.62B).
         param_count_billions = _params_from_config(cfg)
         if param_count_billions is not None:
             notes.append(f"param count {param_count_billions:.2f}B from the model's config.json")
+    if param_count_billions is None:
+        param_count_billions = _estimate_param_count_billions(model)
     if param_count_billions is None:
         # Defensive default: 7B is the v1.3 canonical 16GB target. Surface
         # the assumption in notes so operators see the imputation.
@@ -1419,85 +1470,75 @@ def estimate_vram(
 
     params = param_count_billions * 1e9
     bytes_to_gb = 1.0 / (1024 ** 3)
+    seq = int(max_seq_length)
+    tied = bool(cfg.get("tie_word_embeddings", True)) if cfg is not None else True
+    embed_params = min(params, float(vocab_size) * hidden_dim * (1 if tied else 2))
+    kv_heads = int((cfg or {}).get("num_key_value_heads") or max(1, num_heads // 4))
+    inter_dim = int((cfg or {}).get("intermediate_size") or 4 * hidden_dim)
+    kv_dim = hidden_dim * kv_heads // max(1, num_heads)
 
-    # 1. Model weights. nf4 base when quantize_base=True (the trainer
-    #    default with load_in_4bit=True); otherwise use bytes_per_param.
+    # 1. Model weights.
     if quantize_base:
-        # nf4: 0.5 bytes per param. The LoRA adapter (if mode='lora')
-        # still lives in bf16 — that's the lora_adapter_gb line.
-        model_weights_gb = (params * 0.5) * bytes_to_gb
-        notes.append("base model quantized to nf4 (0.5 bytes/param)")
+        # 4-bit: embeddings (and an untied head) stay 16-bit; the rest costs
+        # ~0.7 bytes/param measured (bitsandbytes nf4 is 0.5, and Unsloth's
+        # dynamic 4-bit builds keep a share of the layers in 16-bit).
+        model_weights_gb = (embed_params * 2 + (params - embed_params) * 0.7) * bytes_to_gb
+        notes.append("4-bit base: embeddings 16-bit, the rest ~0.7 bytes/param")
     else:
         model_weights_gb = (params * bytes_per_param) * bytes_to_gb
 
-    # 2. LoRA adapter. Per-layer cost = rank * (in_dim + out_dim) * 2 (A + B).
-    #    Modern PEFT applies LoRA to ~7 modules per layer (q, k, v, o, gate,
-    #    up, down for Llama/Qwen-style architectures). Approximate with a
-    #    7-module-per-layer constant.
+    # 2. LoRA adapter (fp32) and 3. what training adds per trainable param.
     if mode == "lora":
-        lora_modules_per_layer = 7
-        lora_adapter_gb = (
-            lora_r
-            * (hidden_dim + hidden_dim)  # in + out (typically same)
-            * num_layers
-            * lora_modules_per_layer
-            * bytes_per_param  # adapters in bf16/fp16 even when base is nf4
-        ) * bytes_to_gb
-    else:
-        lora_adapter_gb = 0.0
-
-    # 3. Optimizer state. paged_adamw_8bit (the trainer default on consumer
-    #    cards) stores 2 momentum buffers per trainable param at 1 byte each.
-    #    Full FT trains the whole model; LoRA only trains the adapter (rank
-    #    * (in + out) * num_layers * 7 modules).
-    trainable_params: float
-    if mode == "lora":
-        trainable_params = lora_r * (hidden_dim + hidden_dim) * num_layers * 7
+        targets = target_modules if target_modules is not None else "all-linear"
+        if isinstance(targets, str):
+            targets = [t.strip() for t in targets.split(",") if t.strip()]
+        if "all-linear" in targets:
+            # q, k, v, o, gate, up, down: sum of (in + out) per layer.
+            dims_per_layer = 9 * hidden_dim + 2 * kv_dim + 3 * inter_dim
+        else:
+            per_module = {
+                "q_proj": 2 * hidden_dim, "o_proj": 2 * hidden_dim,
+                "k_proj": hidden_dim + kv_dim, "v_proj": hidden_dim + kv_dim,
+                "gate_proj": hidden_dim + inter_dim, "up_proj": hidden_dim + inter_dim,
+                "down_proj": hidden_dim + inter_dim,
+            }
+            dims_per_layer = sum(per_module.get(t, 2 * hidden_dim) for t in targets)
+        trainable_params = float(lora_r * dims_per_layer * num_layers)
+        lora_adapter_gb = trainable_params * 4 * bytes_to_gb
+        optimizer_state_gb = trainable_params * 6.3 * bytes_to_gb
     else:
         trainable_params = params
-    # paged 8-bit Adam: 2 buffers * 1 byte + gradient (bytes_per_param)
-    optimizer_state_gb = (
-        trainable_params * (2 * 1 + bytes_per_param)
-    ) * bytes_to_gb
+        lora_adapter_gb = 0.0
+        # Gradients (16-bit) + the paged 8-bit optimizer full mode forces.
+        optimizer_state_gb = trainable_params * 3.0 * bytes_to_gb
 
-    # 4. Activations. With gradient checkpointing the activation memory
-    #    scales as sqrt(num_layers) instead of linearly. Mode='full'
-    #    enables gradient_checkpointing=True by default; mode='lora'
-    #    inherits the setting from settings.lora.use_gradient_checkpointing.
-    # Full mode always checkpoints; LoRA does unless it was turned off.
-    activation_layer_factor = (
-        max(1.0, num_layers ** 0.5) if (mode == "full" or gradient_checkpointing)
-        else float(num_layers)
-    )
-    activations_gb = (
-        batch_size
-        * max_seq_length
-        * hidden_dim
-        * activation_layer_factor
-        * bytes_per_param
-        * 2  # forward + backward
-    ) * bytes_to_gb
-    if mode == "full":
+    # 4. Per-row cost. The attention scores of the layer being differentiated
+    #    (SDPA with a dense mask) or the fp32 logits, whichever is larger,
+    #    plus per-token activations.
+    if varlen_attention is None:
+        varlen_attention = _varlen_attention_installed()
+    logits_bytes = 4.0 * vocab_size * seq
+    if mode == "full" or varlen_attention:
+        # The transformers path (full mode) and flash / xFormers kernels do
+        # not materialise the seq x seq scores.
+        attention_bytes = 0.0
+    else:
+        attention_bytes = 16.0 * num_heads * seq * seq
+        if not gradient_checkpointing:
+            attention_bytes *= num_layers
+            notes.append("gradient checkpointing off: every layer's attention is kept")
+    row_bytes = max(attention_bytes, logits_bytes) + 35.0 * hidden_dim * seq
+    activations_gb = batch_size * row_bytes * bytes_to_gb
+    if attention_bytes > logits_bytes:
         notes.append(
-            "mode='full' assumes gradient_checkpointing=True (sqrt(L) "
-            "activation memory)"
+            "attention through PyTorch SDPA (no flash-attention / xFormers): "
+            "memory grows with seq^2 per row"
         )
+    if mode == "full":
+        notes.append("mode='full': measured on one model (135M); treat as a guide")
 
-    # 5. KV cache. batch * seq_len * num_heads * head_dim * num_layers * 2 (k+v)
-    #    bytes_per_param-sized. Training rarely keeps the full KV cache (it's
-    #    primarily an inference cost) but transformers libraries allocate it
-    #    transiently during forward; the constant approximates that share.
-    head_dim = hidden_dim // max(1, num_heads)
-    kv_cache_gb = (
-        batch_size
-        * max_seq_length
-        * num_heads
-        * head_dim
-        * num_layers
-        * 2  # k + v
-        * bytes_per_param
-        * 0.25  # Training amortization factor — full cache not retained
-    ) * bytes_to_gb
+    # 5. Kept for the breakdown's shape; training holds no KV cache.
+    kv_cache_gb = 0.0
 
     # 6. v1.7 FSDP2 CPU-offload (mode='full', full_ft_offload=True). Params +
     #    gradients + optimizer state spill into host RAM; the GPU keeps only the
@@ -1580,6 +1621,59 @@ def estimate_vram(
 # call this without instantiating a separate Trainer, and the static-method
 # form would put a hidden coupling on Trainer's MRO. Plain functions stay
 # easy to mock in tests too.
+
+
+def _varlen_attention_available(model: Any, *, unsloth_loaded: bool) -> bool:
+    """True when attention can train on a FLATTENED batch in linear memory.
+
+    Padding-free / packed training joins a batch into one sequence of
+    ``batch x seq`` tokens. Only variable-length attention kernels handle
+    that efficiently: flash-attention, or xFormers on the Unsloth path.
+    """
+    attn = str(getattr(getattr(model, "config", None), "_attn_implementation", "") or "")
+    if attn.startswith("flash_attention"):
+        return True
+    if unsloth_loaded:
+        import sys as _sys
+
+        dispatch = _sys.modules.get("unsloth.utils.attention_dispatch")
+        if dispatch is not None and (
+            getattr(dispatch, "HAS_FLASH_ATTENTION", False)
+            or getattr(dispatch, "HAS_XFORMERS", False)
+        ):
+            return True
+    return False
+
+
+def _keep_batches_rectangular(sft_config: Any, model: Any, *, unsloth_loaded: bool) -> bool:
+    """Keep ``(batch, seq)`` batches when no variable-length attention exists.
+
+    Without flash-attention or xFormers (every Windows install: flash-attn
+    has no Windows build and xFormers is disabled on RTX 40/50), a flattened
+    batch is attended through PyTorch SDPA with a dense
+    ``heads x (batch*seq)^2`` mask. Memory then grows with the SQUARE of the
+    batch size: measured on an RTX 5090, a 1B QLoRA at batch 4 x 2048 tokens
+    tried to allocate past 25.7 GiB, hit OOM and fell back to batch 2, where
+    rectangular batches need 9.6 GiB at batch 4 (and 18 GiB at batch 8). On
+    the plain transformers path the flattened batch has no boundary mask at
+    all, which TRL itself warns is unsupported.
+
+    So in that case: padding-free off, and packing (when on) uses TRL's
+    ``wrapped`` strategy, whose rows are ordinary fixed-length sequences.
+    ``--no-packing`` still gives one sample per row. Returns True when the
+    config was changed.
+    """
+    if _varlen_attention_available(model, unsloth_loaded=unsloth_loaded):
+        return False
+    if hasattr(sft_config, "padding_free"):
+        sft_config.padding_free = False
+    if getattr(sft_config, "packing", False):
+        if hasattr(sft_config, "packing_strategy"):
+            sft_config.packing_strategy = "wrapped"
+        # Unsloth's SFTTrainer wrapper otherwise re-enables its own packing
+        # (which flattens); this is the opt-out attribute it reads.
+        sft_config._unsloth_disable_auto_packing = True
+    return True
 
 
 def _build_sft_config(
@@ -5504,6 +5598,16 @@ class Trainer:
         if self._fp8_effective:
             _set = self._set_fp8_shape_constraints_on_sft_config
             _set(sft_config)
+        if _keep_batches_rectangular(
+            sft_config, self._model, unsloth_loaded=bool(self.use_unsloth)
+        ) and not getattr(self, "_rectangular_logged", False):
+            self._rectangular_logged = True
+            logger.info(
+                "No flash-attention or xFormers attention available: keeping "
+                "batches rectangular%s so attention memory grows linearly with "
+                "the batch size.",
+                " (wrapped packing)" if getattr(sft_config, "packing", False) else "",
+            )
         return sft_config
 
     @staticmethod

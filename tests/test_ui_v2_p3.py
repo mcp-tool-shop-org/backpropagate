@@ -210,6 +210,39 @@ def test_small_models_use_their_size_class_shape():
     assert small.activations_gb < big.activations_gb
 
 
+# Measured peaks (RTX 5090, 2026-10-02): (label, kwargs, measured GiB).
+_L1 = {"param_count_billions": 1.236, "hidden_dim": 2048, "num_layers": 16, "num_heads": 32, "vocab_size": 128256}
+_Q7 = {"param_count_billions": 7.616, "hidden_dim": 3584, "num_layers": 28, "num_heads": 28, "vocab_size": 152064}
+_SM = {"param_count_billions": 0.1345, "hidden_dim": 576, "num_layers": 30, "num_heads": 9, "vocab_size": 49152}
+_QV = {"target_modules": "q_proj,v_proj", "lora_r": 16}
+_MEASURED = [
+    ("llama1b qlora b1", dict(**_L1, **_QV, batch_size=1), 3.22),
+    ("llama1b qlora b4", dict(**_L1, **_QV, batch_size=4), 9.59),
+    ("llama1b qlora b8", dict(**_L1, **_QV, batch_size=8), 18.09),
+    ("llama1b qlora b4 s1024", dict(**_L1, **_QV, batch_size=4, max_seq_length=1024), 3.34),
+    ("llama1b qlora b2 s4096", dict(**_L1, **_QV, batch_size=2, max_seq_length=4096), 17.59),
+    ("llama1b lora16bit b4", dict(**_L1, **_QV, batch_size=4, quantize_base=False), 10.87),
+    ("qwen7b qlora b2", dict(**_Q7, **_QV, batch_size=2), 10.69),
+    ("smol135m qlora b8", dict(**_SM, **_QV, batch_size=8), 4.92),
+    ("smol135m full b8", dict(**_SM, mode="full", batch_size=8), 3.72),
+]
+
+
+@pytest.mark.parametrize(("label", "kwargs", "measured"), _MEASURED, ids=[m[0] for m in _MEASURED])
+def test_estimate_tracks_measured_peaks(label, kwargs, measured):
+    """The cost model stays within 12% of peaks measured on real training."""
+    est = estimate_vram("org/x", overhead_fraction=0.0, varlen_attention=False, **kwargs)
+    assert est.total_gb == pytest.approx(measured, rel=0.12), label
+
+
+def test_batch_cost_is_linear_and_flash_drops_the_quadratic_term():
+    one = estimate_vram("org/x", **_L1, **_QV, batch_size=1, varlen_attention=False)
+    four = estimate_vram("org/x", **_L1, **_QV, batch_size=4, varlen_attention=False)
+    assert four.activations_gb == pytest.approx(4 * one.activations_gb)
+    flash = estimate_vram("org/x", **_L1, **_QV, batch_size=4, varlen_attention=True)
+    assert flash.activations_gb < four.activations_gb
+
+
 def test_shape_comes_from_a_local_config(tmp_path):
     model_dir = tmp_path / "tiny"
     model_dir.mkdir()

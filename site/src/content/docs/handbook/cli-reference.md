@@ -502,6 +502,7 @@ backprop estimate-vram --json                                # machine-readable
 | `model` (positional) | `Qwen/Qwen2.5-7B-Instruct` | Model name (used only for the printed header — VRAM tiers are model-agnostic). |
 | `--vram-gb` | unset (auto-detect) | Override the detected VRAM (in GB) so you can simulate the table for a card you don't currently have. Default: query the primary CUDA device. Range: `(0, 512]`. |
 | `--no-4bit` | off | **1.8.2** — estimate with an unquantized (16-bit) base model instead of the default 4-bit QLoRA base, matching `backprop train --no-4bit`. Also triggers the per-config estimate. |
+| `--target-modules TEXT` | all-linear | **1.8.2** — LoRA target modules for the per-config estimate (`q_proj,v_proj`, or `all-linear`), matching `backprop train --target-modules`. Sizes the adapter. |
 | `--no-gradient-checkpointing` | off | **1.8.2** — estimate LoRA activations without gradient checkpointing (every layer's activations kept), matching `backprop train --no-gradient-checkpointing`. Ignored with `--mode full`, which always checkpoints. |
 | `--json` | off | Emit the table as JSON for CI / scripting consumers. The payload carries `quantize_base` (`true` for the default 4-bit base, `false` with `--no-4bit`). |
 

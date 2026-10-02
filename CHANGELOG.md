@@ -58,14 +58,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`backprop estimate-vram` (and the UI's estimate) are closer to real use.**
-  Full fine-tuning is priced with a 16-bit base (it was priced as 4-bit, a
-  4x undercount of the weights); LoRA activations account for gradient
-  checkpointing, which is on by default; the model's own shape comes from
-  its `config.json` when it is in the Hugging Face cache or a local folder
-  (never downloaded), otherwise from its size class; and ids that name their
-  size in millions (`SmolLM2-135M`) are no longer priced as 7B. Estimates
-  change accordingly.
+- **`backprop estimate-vram` (and the UI's estimate) now track measured
+  memory.** The old formula was 3 to 10 times low: it estimated 2.5 GB for a
+  run that peaked at 6.5 GiB, and 1.9 GB for one that peaked at 17.8 GiB. The
+  new one is fitted to 22 real training runs on an RTX 5090 (six models from
+  135M to 7B, batch 1 to 8, 1,024 to 4,096-token rows, rank 16 and 256) and
+  is within about 10% of the measured peak on them, within 2% on most. It
+  accounts for the attention memory that grows with the square of the
+  sequence length when flash-attention and xFormers are absent (every
+  Windows install), the 16-bit embeddings of a 4-bit base, the adapter's
+  size for the chosen target modules, and a 16-bit base for full
+  fine-tuning. The model's own shape comes from its `config.json` when it
+  is in the Hugging Face cache or a local folder (never downloaded), and ids
+  that name their size in millions (`SmolLM2-135M`) are no longer priced as
+  7B. It is still an estimate: another GPU, driver or attention backend
+  shifts it. `estimate-vram` gains `--target-modules`.
 - **The web UI's training forms open on the CLI's defaults** (the Quality
   LoRA shape: rank 256, alpha 512, every linear layer; 4-bit base; SFT). They
   used to show rank 16 on four attention layers, which the job never used.
@@ -77,6 +84,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Training without flash-attention or xFormers no longer needs memory
+  that grows with the square of the batch size.** That is every Windows
+  install (flash-attn has no Windows build, and xFormers is disabled on RTX
+  40/50 cards). Batches were joined into one long sequence and attended
+  with a dense mask, so a 1B QLoRA at batch 4 with 2,048-token rows tried
+  to allocate past 25.7 GiB on a 32 GB card, ran out of memory and fell
+  back to batch 2. Such runs now keep ordinary batches: the same run peaks
+  at 9.6 GiB at batch 4 and 18.1 GiB at batch 8, with the same loss. Packing
+  uses TRL's `wrapped` strategy in that case (same tokens per step; samples
+  that share a row can see each other, and a sample can be split across two
+  rows); `--no-packing` keeps one sample per row. Setups with
+  flash-attention or xFormers are unchanged.
 - **Training no longer deletes its own output folder** (#278, data loss).
   `backprop train --output X` saves the model into X, and the save replaced
   the whole folder, so every run deleted X's `run_history.json` (the Runs

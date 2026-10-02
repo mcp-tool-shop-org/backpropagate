@@ -1023,9 +1023,12 @@ class TrainState(rx.State):
         advice = {
             "fits": "",
             "tight": " Close to the limit: lower the batch or the LoRA rank if it runs out of memory.",
-            "wont_fit": " Try QLoRA, a smaller model, or a lower batch or LoRA rank.",
+            "wont_fit": " Try a lower batch size first, then QLoRA, a lower LoRA rank or a smaller model.",
         }.get(self.vram_est_verdict, "")
-        return f"Estimate for {batch}, 2,048-token sequences.{advice}"
+        return (
+            f"An estimate for {batch} with full 2,048-token rows; shorter data "
+            f"uses less.{advice}"
+        )
 
     @rx.var
     def vram_fill_pct(self) -> str:
@@ -1199,6 +1202,14 @@ class TrainState(rx.State):
         return TrainState.refresh_estimate
 
     @rx.event
+    def set_target_modules(self, value: str):
+        new, err = _apply_target_modules(value)
+        if new is not None:
+            self.target_modules = new
+        self.target_modules_error = err
+        return TrainState.refresh_estimate
+
+    @rx.event
     def set_dataset_path(self, value: str) -> None:
         self.dataset_path, self.dataset_path_error = _validate_ui_path(value)
 
@@ -1251,11 +1262,13 @@ class TrainState(rx.State):
                 self.train_mode != "lora",
                 bool(self.gradient_checkpointing),
                 float(self.vram_total_gb or 0.0),
+                str(self.target_modules).replace(" ", ""),
             )
         result = await asyncio.to_thread(
             lambda: vram_verdict(
                 args[0], mode=args[1], lora_r=args[2], batch=args[3],
                 base_4bit=args[4], gradient_checkpointing=args[5], card_gb=args[6],
+                target_modules=args[7],
             )
         )
         async with self:
@@ -1281,13 +1294,6 @@ class TrainState(rx.State):
         if f is not None:
             self.lora_dropout = f
         self.lora_dropout_error = err
-
-    @rx.event
-    def set_target_modules(self, value: str) -> None:
-        new, err = _apply_target_modules(value)
-        if new is not None:
-            self.target_modules = new
-        self.target_modules_error = err
 
     @rx.event
     def set_gpu_temp_threshold(self, value: str | int) -> None:

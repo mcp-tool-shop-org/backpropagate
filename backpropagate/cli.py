@@ -7451,7 +7451,10 @@ def _cmd_calibrate_body(args: argparse.Namespace) -> int:
     _print_success(f"Measured on {cal.machine.get('gpu', 'this GPU')}")
     _print_kv("Loaded model", f"{cal.load_gib:.2f} GB")
     _print_kv("Training floor", f"{cal.floor_gib:.2f} GB")
-    if cal.rows_measured:
+    if cal.mode == "full" and cal.rows_measured:
+        _print_kv("Gradients + optimizer", f"{cal.fixed_gib:.2f} GB (every batch size)")
+        _print_kv("Each row of 2,048 tokens", f"{cal.rows_gib(1, 2048):.2f} GB (the formula's cost)")
+    elif cal.rows_measured:
         _print_kv("Each row of 1,024 tokens", f"{cal.rows_gib(1, 1024):.2f} GB")
         _print_kv("Each row of 2,048 tokens", f"{cal.rows_gib(1, 2048):.2f} GB")
         _print_kv("Probes", f"highest cost per token used; they differed by {cal.max_residual_pct:.0f}%")

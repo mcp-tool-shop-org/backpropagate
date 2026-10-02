@@ -759,6 +759,7 @@ def _vram_preflight(spec: JobSpec) -> tuple[bool, str]:
             quantize_base=bool(spec.base_4bit) or spec.mode != "lora",
             gradient_checkpointing=bool(spec.gradient_checkpointing),
             target_modules=spec.target_modules or None,
+            method=str(spec.method or "sft"),
         )
         estimate_gb = float(getattr(estimate, "total_gb", 0.0) or 0.0)
         if estimate_gb <= 0:

@@ -1359,6 +1359,7 @@ def estimate_vram(
     gradient_checkpointing: bool = True,  # the trainer default in both modes
     target_modules: str | list[str] | None = None,  # None: all-linear (the default)
     use_calibration: bool = True,  # prefer a measurement made on this GPU
+    method: str = "sft",  # a measurement describes SFT only
 ) -> VRAMEstimate:
     """v1.4 BACKEND-F-002: pre-flight VRAM estimator.
 
@@ -1425,8 +1426,13 @@ def estimate_vram(
         use_calibration: when True (default) and this model was measured on
             this GPU (``backprop estimate-vram <model> --calibrate``), the
             result comes from that measurement and ``source`` is
-            ``"measured"``. Not used with ``offload`` or with gradient
-            checkpointing off.
+            ``"measured"``. Not used with ``offload``, with gradient
+            checkpointing off, for a ``method`` other than SFT, or for rows
+            more than twice as long as the measurement probed.
+        method: the training method. The preference methods (``orpo``,
+            ``simpo``, ``kto``) process two sequences per example, which
+            neither the formula nor a measurement models; the estimate then
+            says so and never reads "measured".
         overhead_fraction: Fragmentation + framework overhead (default 15%).
         param_count_billions: Optional explicit parameter count. When
             None, estimated via :func:`_estimate_param_count_billions`.
@@ -1589,13 +1595,25 @@ def estimate_vram(
         )
 
     source = "estimate"
-    if use_calibration and not offload and gradient_checkpointing:
+    sft = str(method or "sft").lower() == "sft"
+    if not sft:
+        notes.append(
+            f"method {method!r} processes two sequences per example; the "
+            "estimate prices one, so expect more"
+        )
+    if use_calibration and not offload and gradient_checkpointing and sft:
         try:
             from . import vram_calibration as _cal
 
             measured = _cal.lookup(model, mode, bool(quantize_base))
         except Exception as exc:  # noqa: BLE001 - a bad store never breaks the estimate
             logger.debug("vram calibration lookup failed: %r", exc)
+            measured = None
+        if measured is not None and not measured.covers(seq):
+            notes.append(
+                f"a measurement exists for this model but probed rows up to "
+                f"{measured.seq_max} tokens; not used for {seq}-token rows"
+            )
             measured = None
         if measured is not None:
             # This model was measured on this GPU: its own load size and
@@ -1608,10 +1626,13 @@ def estimate_vram(
             )
             model_weights_gb = measured.load_gib
             lora_adapter_gb = extra * _cal.ADAPTER_BYTES_LOADED * bytes_to_gb
+            # Full fine-tuning: the probes' overhead already holds the
+            # gradients and optimizer state; it replaces the formula's term
+            # (adding both counted them twice).
             optimizer_state_gb = (
                 extra * _cal.ADAPTER_BYTES_TRAINING * bytes_to_gb
                 if mode == "lora"
-                else optimizer_state_gb
+                else measured.fixed_gib
             )
             rows_gb = measured.rows_gib(batch_size, seq)
             if rows_gb is None:

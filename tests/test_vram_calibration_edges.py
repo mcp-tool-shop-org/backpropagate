@@ -58,6 +58,7 @@ def test_machine_fingerprint_with_cuda(monkeypatch):
         lambda index: SimpleNamespace(total_memory=24 * vc.GIB),
     )
     monkeypatch.setattr("torch.cuda.get_device_name", lambda index: "Test GPU")
+    monkeypatch.setattr("torch.cuda.current_device", lambda: 0)
     fp = vc.machine_fingerprint()
     assert fp is not None
     assert fp["gpu"] == "Test GPU" and fp["vram_gib"] == 24.0
@@ -123,6 +124,9 @@ class _FakeProc:
         self.stdout = io.BytesIO(("\n".join(lines) + "\n").encode("utf-8"))
 
     def wait(self):
+        return 0
+
+    def poll(self):
         return 0
 
     def kill(self):
@@ -225,15 +229,19 @@ def test_estimate_survives_a_failing_lookup(monkeypatch):
     assert est.source == "estimate" and est.total_gb > 0
 
 
-def test_measured_full_fine_tune_keeps_the_formula_training_term(monkeypatch):
+def test_measured_full_fine_tune_uses_the_measured_training_cost(monkeypatch):
+    """The probes' overhead already holds gradients and optimizer state.
+    Adding the formula's term as well counted them twice (about 8.6 GiB too
+    much for a 3B model)."""
     shape = {"param_count_billions": 1.0, "hidden_dim": 2048, "num_layers": 16,
              "num_heads": 32, "vocab_size": 128256}
     plain = estimate_vram("org/m-1B", mode="full", batch_size=1, use_calibration=False, **shape)
-    cal = _cal(mode="full", base_4bit=False, load_gib=2.5)
+    cal = _cal(mode="full", base_4bit=False, load_gib=2.5, fixed_gib=5.1, quad_bytes=0.0)
     monkeypatch.setattr(vc, "lookup", lambda model, mode="lora", base_4bit=True, machine=None: cal)
     est = estimate_vram("org/m-1B", mode="full", batch_size=1, **shape)
     assert est.source == "measured" and est.model_weights_gb == 2.5
-    assert est.optimizer_state_gb == pytest.approx(plain.optimizer_state_gb)
+    assert est.optimizer_state_gb == 5.1
+    assert plain.optimizer_state_gb != pytest.approx(5.1)
     assert est.lora_adapter_gb == 0.0
 
 

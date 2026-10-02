@@ -72,7 +72,11 @@ def lora_make(model, **kw):
 class TestTransformersFullFt:
     def test_full_mode_loads_plain_fp32_trainable_model_on_cpu(self, tiny_dir):
         t = make(tiny_dir, mode="full")
-        t.load_model()
+        # Pin the CPU host: with CUDA present the resolver picks bf16 and the
+        # weights load in bf16, so the fp32 contract below is only reachable
+        # through the CPU resolution (False, False).
+        with patch.object(Trainer, "_detect_optimal_dtype", return_value=(False, False)):
+            t.load_model()
         assert t._is_loaded is True
         assert all(p.requires_grad for p in t._model.parameters())
         assert all(p.dtype.is_floating_point and str(p.dtype) == "torch.float32"

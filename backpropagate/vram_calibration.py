@@ -280,9 +280,6 @@ def calibrate(
         [sys.executable, "-m", "backpropagate.vram_calibration", json.dumps(payload)],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
         env=env,
     )
     result: dict[str, Any] | None = None
@@ -299,8 +296,11 @@ def calibrate(
     timer.daemon = True
     timer.start()
     assert proc.stdout is not None
-    for line in proc.stdout:
-        line = line.rstrip("\n")
+    for raw in proc.stdout:
+        # Bytes from the pipe, decoded here: the trainer's progress bars are
+        # not always valid UTF-8 on Windows consoles.
+        line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+        line = line.rstrip("\r\n")
         if line.startswith("CALIBRATION "):
             try:
                 row = json.loads(line[len("CALIBRATION "):])

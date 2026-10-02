@@ -565,15 +565,18 @@ _PAGE_SPECS = {
     "train": (
         "backpropagate.ui_app.pages.train:train_page",
         {("on_change", f"TrainState.set_{f}") for f in (
-            "model", "quantization", "steps", "batch_size", "learning_rate", "lora_r",
-            "lora_alpha", "lora_dropout", "target_modules", "dataset_path",
-            "gpu_temp_threshold", "wandb_run_name", "gradient_checkpointing",
-            "flash_attention")} | {("on_click", "TrainState.start_training")},
+            "model", "preset", "train_mode", "method", "steps", "batch_size",
+            "learning_rate", "lora_r", "lora_alpha", "lora_dropout", "target_modules",
+            "dataset_path", "gpu_temp_threshold", "wandb_run_name",
+            "gradient_checkpointing")} | {("on_click", "TrainState.start_training")},
     ),
     "multi_run": (
         "backpropagate.ui_app.pages.multi_run:multi_run_page",
         {("on_change", f"MultiRunState.set_{f}") for f in (
-            "model", "dataset_path", "steps", "num_runs", "samples_per_run", "merge_mode")}
+            "model", "preset", "train_mode", "method", "dataset_path", "steps",
+            "batch_size", "learning_rate", "lora_r", "lora_alpha", "lora_dropout",
+            "target_modules", "num_runs", "samples_per_run", "merge_mode",
+            "gpu_temp_threshold", "wandb_run_name", "gradient_checkpointing")}
         | {("on_click", "MultiRunState.start_multi_run")},
     ),
     "export": (

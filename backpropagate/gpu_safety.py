@@ -179,6 +179,8 @@ __all__ = [
     "GPUStatus",
     "GPUSafetyConfig",
     "GPUCondition",
+    "GpuTempStopCallback",
+    "build_gpu_temp_stop_callback",
     "check_gpu_safe",
     "get_gpu_status",
     "wait_for_safe_gpu",
@@ -984,3 +986,160 @@ def install_pynvml_hint() -> str:
         "  pip install pynvml\n"
         "Or on Windows: pip install nvidia-ml-py"
     )
+
+
+# =============================================================================
+# COOPERATIVE TEMPERATURE STOP (--gpu-max-temp)
+# =============================================================================
+#
+# A HF ``TrainerCallback`` that ends a run cleanly when the card stays too hot.
+# It uses the same cooperative path a user Stop does (``should_save`` +
+# ``should_training_stop`` at a step boundary) and never kills anything.
+#
+# ``transformers`` is imported lazily — this module is imported eagerly by the
+# package ``__init__`` and must stay cheap — so the class itself is built on
+# first access (module ``__getattr__`` below) or via
+# :func:`build_gpu_temp_stop_callback`.
+
+_temp_stop_cls: type | None = None
+
+
+def _read_device_temperature_c() -> float | None:
+    """Device temperature in C via :func:`get_system_gpu_readings`, or None."""
+    try:
+        readings = get_system_gpu_readings()
+    except Exception as exc:  # noqa: BLE001 — telemetry must never kill training
+        logger.debug(f"temperature read failed: {exc!r}")
+        return None
+    if readings is None:
+        return None
+    return readings.temperature_c
+
+
+def _temp_stop_callback_class() -> type:
+    """Build (once) and return the ``GpuTempStopCallback`` class."""
+    global _temp_stop_cls
+    if _temp_stop_cls is not None:
+        return _temp_stop_cls
+
+    from transformers import TrainerCallback as _HFTrainerCallback
+
+    class GpuTempStopCallback(_HFTrainerCallback):  # type: ignore[misc, valid-type]
+        """Stop (and save) a run when the GPU stays at or above a temperature.
+
+        The temperature is sampled at step boundaries, at most once every
+        ``poll_s`` seconds. When ``consecutive`` samples IN A ROW are
+        ``>= max_temp_c`` the callback sets ``control.should_save`` and
+        ``control.should_training_stop`` (the cooperative path a user Stop
+        takes), logs one structured WARNING and calls ``on_trip(reason)``
+        exactly once. A cooler sample resets the streak, so a single spike
+        never trips it. A missing reading (no GPU, no pynvml / nvidia-smi) is
+        skipped (it counts as neither hot nor cool), so a host without
+        telemetry never trips.
+
+        Args:
+            max_temp_c: Limit in degrees C.
+            on_trip: Called once with a human reason, e.g.
+                ``"GPU at 87 °C, above the 85 °C limit"``.
+            poll_s: Minimum seconds between samples.
+            consecutive: Hot samples in a row required to trip.
+            read_temp_c: Override the temperature source (tests); returns C or
+                None. Defaults to :func:`get_system_gpu_readings`.
+            clock: Override ``time.monotonic`` (tests).
+        """
+
+        def __init__(
+            self,
+            max_temp_c: float,
+            on_trip: Callable[[str], None] | None = None,
+            poll_s: float = 5.0,
+            consecutive: int = 3,
+            *,
+            read_temp_c: Callable[[], float | None] | None = None,
+            clock: Callable[[], float] | None = None,
+        ) -> None:
+            super().__init__()
+            self.max_temp_c = float(max_temp_c)
+            self.on_trip = on_trip
+            self.poll_s = float(poll_s)
+            self.consecutive = max(1, int(consecutive))
+            self._read_temp_c = read_temp_c or _read_device_temperature_c
+            self._clock = clock or time.monotonic
+            self._last_poll: float | None = None
+            self._hot_streak = 0
+            self.tripped = False
+            self.trip_reason: str | None = None
+
+        def on_train_begin(self, args: object, state: object, control: object, **kwargs: object) -> None:  # noqa: ARG002
+            # Multi-run reuses one instance for every run: start each run with
+            # a clean streak (a trip ends the whole session, so ``tripped`` is
+            # deliberately NOT reset).
+            self._hot_streak = 0
+            self._last_poll = None
+
+        def on_step_end(self, args: object, state: object, control: object, **kwargs: object) -> object:  # noqa: ARG002
+            if self.tripped:
+                # Keep asking for the stop in case another callback cleared it.
+                control.should_save = True  # type: ignore[attr-defined]
+                control.should_training_stop = True  # type: ignore[attr-defined]
+                return control
+            now = self._clock()
+            if self._last_poll is not None and (now - self._last_poll) < self.poll_s:
+                return control
+            self._last_poll = now
+            temp = self._read_temp_c()
+            if temp is None:
+                return control
+            if temp < self.max_temp_c:
+                self._hot_streak = 0
+                return control
+            self._hot_streak += 1
+            if self._hot_streak < self.consecutive:
+                return control
+            self.tripped = True
+            reason = (
+                f"GPU at {temp:g} °C, above the {self.max_temp_c:g} °C limit"
+            )
+            self.trip_reason = reason
+            control.should_save = True  # type: ignore[attr-defined]
+            control.should_training_stop = True  # type: ignore[attr-defined]
+            logger.warning(
+                "gpu_temp_stop: %s (%d consecutive readings); saving a "
+                "checkpoint and stopping at step %s.",
+                reason,
+                self._hot_streak,
+                getattr(state, "global_step", "?"),
+                extra={
+                    "event": "gpu_temp_stop",
+                    "temp_c": temp,
+                    "max_temp_c": self.max_temp_c,
+                },
+            )
+            if self.on_trip is not None:
+                try:
+                    self.on_trip(reason)
+                except Exception as exc:  # noqa: BLE001 — the HF stop above still applies
+                    logger.warning("gpu_temp_stop on_trip hook failed: %r", exc)
+            return control
+
+    _temp_stop_cls = GpuTempStopCallback
+    return GpuTempStopCallback
+
+
+def build_gpu_temp_stop_callback(
+    max_temp_c: float,
+    on_trip: Callable[[str], None] | None = None,
+    poll_s: float = 5.0,
+    consecutive: int = 3,
+    **kwargs: object,
+) -> object:
+    """Construct a ``GpuTempStopCallback`` (see its docstring for the args)."""
+    return _temp_stop_callback_class()(max_temp_c, on_trip, poll_s, consecutive, **kwargs)
+
+
+def __getattr__(name: str) -> object:
+    # PEP 562: ``from backpropagate.gpu_safety import GpuTempStopCallback``
+    # builds the class on first use without importing transformers eagerly.
+    if name == "GpuTempStopCallback":
+        return _temp_stop_callback_class()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -1,10 +1,11 @@
-"""Multi-Run page — ``/multi-run`` — SLAO sweep surface (ui-v2 P2).
+"""Multi-Run page — ``/multi-run`` — SLAO sweep surface (ui-v2 P2/P3).
 
 Starts a real ``backprop multi-run`` job through the JobManager. Every field
-on the form reaches the CLI: model, dataset, runs, steps per run, samples
-per run and the merge choice (SLAO / simple average / TIES). Settings the
-multi-run CLI has no flag for (learning rate, batch size, LoRA shape) are
-not shown, so nothing on the form is silently ignored.
+on the form reaches a CLI flag: the shared training cards (model preset,
+dataset, method, QLoRA/LoRA mode, learning rate, batch, LoRA shape, the
+advanced knobs) plus runs, steps per run, samples per run and the merge
+choice (SLAO / simple average / TIES). A multi-run merges LoRA adapters, so
+there is no full fine-tune mode here.
 
 While the job runs the page shows the shared progress card ("run 2 of 3",
 one bar for the whole session), the loss chart, and Stop and save; the rail
@@ -17,7 +18,6 @@ import reflex as rx
 
 from backpropagate.ui_state import MultiRunState, TrainState
 
-from ..chrome import BpFooter, BpHeader, BpLeftNav, BpSideRail
 from ..components.field import FIELD_STYLE as _FIELD_STYLE
 from ..components.field import bp_field as _field
 from ..components.group import Group
@@ -28,6 +28,16 @@ from ..components.job_panel import (
     job_progress_card,
     job_reattach_banner,
     job_refusal_callout,
+)
+from ..components.page import bp_page
+from ..components.train_form import (
+    advanced_card,
+    dataset_card,
+    lora_card,
+    method_card,
+    mode_card,
+    start_from_card,
+    training_shape_card,
 )
 
 
@@ -42,44 +52,6 @@ def _number_input(value, on_change, placeholder: str, aria_label: str) -> rx.Com
         disabled=TrainState.form_disabled,
         style={**_FIELD_STYLE, "width": "100%"},
         aria_label=aria_label,
-    )
-
-
-def _model_group() -> rx.Component:
-    return Group(
-        _field(
-            "HuggingFace model id",
-            rx.input(
-                placeholder="meta-llama/Llama-3.1-8B",
-                default_value=MultiRunState.model,
-                on_change=MultiRunState.set_model,
-                size="2",
-                disabled=TrainState.form_disabled,
-                style={**_FIELD_STYLE, "width": "100%"},
-                aria_label="HuggingFace model id",
-            ),
-            MultiRunState.model_error,
-        ),
-        _field(
-            "Dataset path",
-            rx.input(
-                placeholder="path/to/dataset.jsonl",
-                default_value=MultiRunState.dataset_path,
-                on_change=MultiRunState.set_dataset_path,
-                size="2",
-                disabled=TrainState.form_disabled,
-                style={**_FIELD_STYLE, "width": "100%"},
-                aria_label="Path to training dataset (JSONL)",
-            ),
-            MultiRunState.dataset_path_error,
-        ),
-        rx.text(
-            "Each run trains on a fresh slice of the dataset; the runs' adapters "
-            "are merged as the sweep goes.",
-            size="1",
-            style={"color": "var(--bp-muted)"},
-        ),
-        title="Model and data",
     )
 
 
@@ -139,9 +111,10 @@ def _sweep_shape_group() -> rx.Component:
             ),
         ),
         rx.text(
-            "Learning rate and LoRA settings use the multi-run defaults.",
+            "Each run trains on a fresh slice of the dataset, and the runs' "
+            "adapters are merged as the sweep goes.",
             size="1",
-            style={"color": "var(--bp-muted)"},
+            style={"color": "var(--bp-muted)", "font_size": "13px"},
         ),
         title="Sweep shape",
     )
@@ -174,76 +147,50 @@ def _start_stop_button() -> rx.Component:
     )
 
 
+def _column(*children: rx.Component) -> rx.Component:
+    return rx.flex(*children, direction="column", gap="var(--space-6)", width="100%")
+
+
 def multi_run_page() -> rx.Component:
     """The Multi-Run surface."""
-    return rx.flex(
-        BpHeader(),
-        rx.flex(
-            BpLeftNav(active="multi-run"),
-            rx.scroll_area(
-                rx.flex(
-                    rx.flex(
-                        rx.heading(
-                            "Multi-run",
-                            size="7",
-                            style={
-                                "color": "var(--bp-text)",
-                                "font_weight": "600",
-                                "letter_spacing": "-0.02em",
-                            },
-                        ),
-                        rx.text(
-                            "SLAO sweep: train several short runs and merge their "
-                            "LoRA adapters, which keeps earlier learning from being "
-                            "overwritten.",
-                            size="2",
-                            style={"color": "var(--bp-muted)"},
-                        ),
-                        direction="column",
-                        gap="var(--space-2)",
-                        width="100%",
-                    ),
-                    job_reattach_banner(),
-                    job_refusal_callout(),
-                    job_error_callout(),
-                    job_progress_card(),
-                    rx.grid(
-                        _model_group(),
-                        _sweep_shape_group(),
-                        columns=rx.breakpoints(initial="1", md="2"),
-                        gap="var(--space-6)",
-                        width="100%",
-                        align="start",
-                    ),
-                    job_loss_chart_card(),
-                    job_next_steps_panel(),
-                    rx.flex(
-                        _start_stop_button(),
-                        gap="var(--space-3)",
-                        margin_top="var(--space-2)",
-                        align="center",
-                        justify="end",
-                    ),
-                    direction="column",
-                    gap="var(--space-6)",
-                    padding="var(--space-7)",
-                    max_width="1320px",
-                    width="100%",
-                    on_mount=[TrainState.refresh_gpu, TrainState.attach_active_job],
-                ),
-                flex_grow="1",
-                style={"height": "100%"},
-                type="auto",
-                scrollbars="vertical",
+    return bp_page(
+        job_reattach_banner(),
+        job_refusal_callout(),
+        job_error_callout(),
+        job_progress_card(),
+        rx.grid(
+            _column(
+                start_from_card(MultiRunState),
+                dataset_card(MultiRunState),
+                method_card(MultiRunState),
             ),
-            BpSideRail(),
-            flex_grow="1",
+            _column(
+                _sweep_shape_group(),
+                mode_card(MultiRunState, allow_full=False),
+                training_shape_card(MultiRunState, with_steps=False),
+                lora_card(MultiRunState),
+            ),
+            columns=rx.breakpoints(initial="1", lg="2"),
+            gap="var(--space-6)",
             width="100%",
-            style={"overflow": "hidden", "min_height": "0"},
+            align="start",
         ),
-        BpFooter(),
-        direction="column",
-        height="100vh",
-        width="100%",
-        style={"background": "var(--bp-bg)"},
+        advanced_card(MultiRunState),
+        job_loss_chart_card(),
+        job_next_steps_panel(),
+        rx.flex(
+            _start_stop_button(),
+            gap="var(--space-3)",
+            align="center",
+            justify="end",
+            class_name="bp-action-bar",
+            width="100%",
+        ),
+        active="multi-run",
+        title="Multi-run",
+        description=(
+            "SLAO sweep: train several short runs and merge their LoRA adapters, "
+            "which keeps earlier learning from being overwritten."
+        ),
+        on_mount=[TrainState.refresh_gpu, TrainState.attach_active_job],
     )

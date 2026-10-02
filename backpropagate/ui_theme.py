@@ -93,7 +93,7 @@ THEME_TOKENS: dict[str, str] = {
     "--bp-text":      "#ECF1F5",
     "--bp-text-2":    "#C7D1D9",
     "--bp-muted":     "#8DA0AD",   # refined: lifted from #78909C for AA at 14px
-    "--bp-muted-2":   "#6B7C88",
+    "--bp-muted-2":   "#8B9BA7",   # ui-v2 P3: AA (4.6:1) on surface-2; was 3.5:1
     # accents
     "--bp-teal":      "#7EC8C8",   # primary
     "--bp-blue":      "#A8C5E2",   # secondary (HF download events)
@@ -151,12 +151,14 @@ LIGHT_TOKENS: dict[str, str] = {
     "--bp-text":      "#131820",
     "--bp-text-2":    "#2E3A47",
     "--bp-muted":     "#5A6B78",
-    "--bp-muted-2":   "#8A99A6",
-    "--bp-teal":      "#2B8A8A",
-    "--bp-blue":      "#4F7CAE",
-    "--bp-seafoam":   "#3FA37A",
-    "--bp-amber":     "#B07A2C",
-    "--bp-peach":     "#B85A38",
+    # ui-v2 P3 accessibility pass: every text-bearing token is AA (>= 4.5:1)
+    # on the light card faces; the previous values measured 2.9-4.1:1.
+    "--bp-muted-2":   "#5C6A76",
+    "--bp-teal":      "#1F7373",
+    "--bp-blue":      "#3F6A99",
+    "--bp-seafoam":   "#2B7F5E",
+    "--bp-amber":     "#8F6020",
+    "--bp-peach":     "#A04B2C",
     # ui-v2 P1 redesign additions (parity with THEME_TOKENS)
     "--bp-field-bg":  "#FBFDFE",
     "--bp-shadow-card": "0 1px 2px rgba(23, 31, 41, 0.08), 0 12px 32px rgba(23, 31, 41, 0.12)",
@@ -300,6 +302,70 @@ code, pre, .mono {
 }
 .bp-nav-row:hover {
   background: var(--bp-surface-2);
+}
+
+/* ui-v2 P3 accessibility pass (WCAG AA text contrast):
+   - solid teal buttons: dark text on teal-9 (6.3:1; white was 3.1:1);
+   - light mode: Radix teal-11 (accent text, soft badges/buttons) darkened
+     to 5.4:1 on teal-3 (was 4.1:1), green-11 likewise;
+   - select placeholders use the muted token (Radix's alpha gray was 4.4:1).
+   Radix sets --accent-11 per [data-accent-color]; overriding it there (one
+   class more specific) reaches badges, soft buttons and the auth chip. */
+.rt-Button.rt-variant-solid[data-accent-color="teal"] {
+  color: #04201d;
+}
+:is(.light, .light-theme, [data-theme="light"]) [data-accent-color="teal"],
+:is(.light, .light-theme, [data-theme="light"])[data-accent-color="teal"] {
+  --accent-11: #00705f;
+  --accent-a11: #00705f;
+}
+:is(.light, .light-theme, [data-theme="light"]) [data-accent-color="green"],
+:is(.light, .light-theme, [data-theme="light"])[data-accent-color="green"] {
+  --accent-11: #0b5d33;
+  --accent-a11: #0b5d33;
+}
+.rt-SelectTrigger[data-placeholder] .rt-SelectTriggerInner,
+.rt-SelectTrigger[data-placeholder] {
+  color: var(--bp-muted);
+}
+
+/* The primary action stays in view (ui-v2 P3): the estimate and Start
+   button dock at the bottom of the scrolling column; the form scrolls
+   underneath a short fade. */
+.bp-action-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  padding: 20px 0 12px;
+  background: linear-gradient(to bottom, transparent, var(--bp-bg) 20px);
+}
+
+/* Choice cards (ui-v2 P3): a radio option as a selectable card. The whole
+   card is the label, so clicking anywhere picks it; the checked card takes
+   the teal edge, the focused radio's card shows the focus ring. */
+.bp-choice {
+  display: block;
+  padding: 12px 14px;
+  background: var(--bp-surface-2);
+  border: 1px solid var(--bp-border);
+  border-radius: var(--bp-r-md);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.bp-choice:hover {
+  border-color: var(--bp-border-2);
+}
+.bp-choice:has([data-state="checked"]) {
+  border-color: var(--bp-teal);
+  background: color-mix(in srgb, var(--bp-teal) 10%, var(--bp-surface-2));
+}
+.bp-choice:has(:focus-visible) {
+  box-shadow: var(--bp-focus);
+}
+.bp-choice:has([data-disabled]) {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 /* WCAG 2.4.7 — preserve focus rings for keyboard users.

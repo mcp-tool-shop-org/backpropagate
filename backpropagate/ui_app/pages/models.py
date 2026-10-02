@@ -77,7 +77,7 @@ def _filter_bar() -> rx.Component:
                 },
             ),
             rx.text(
-                ModelsState.total_size_mb + " MB",
+                ModelsState.total_size_label,
                 size="3",
                 class_name="bp-num",
                 style={
@@ -145,9 +145,7 @@ def _model_row(row) -> rx.Component:
             },
         ),
         rx.text(
-            # f-string, not ``+``: ``row["size_mb"]`` is an untyped foreach-item
-            # Var; ``Var + str`` raises TypeError at compile.
-            f"{row['size_mb']} MB",
+            row["size_label"],
             size="2",
             class_name="bp-num",
             style={
@@ -174,9 +172,8 @@ def _model_row(row) -> rx.Component:
             rx.alert_dialog.content(
                 rx.alert_dialog.title("Delete cached model?"),
                 rx.alert_dialog.description(
-                    "This permanently removes the model's snapshot directory "
-                    "from disk. It will be re-downloaded on the next "
-                    "`AutoModel.from_pretrained(...)` call.",
+                    "This permanently removes the model's files from disk. "
+                    "It downloads again the next time a run uses it.",
                 ),
                 rx.flex(
                     rx.alert_dialog.cancel(
@@ -220,10 +217,8 @@ def _empty_state() -> rx.Component:
             style={"color": "var(--bp-text-2)"},
         ),
         rx.text(
-            "Models download on first use. Try `backprop train <model> "
-            "<dataset.jsonl>` from the shell, or open the Single run tab "
-            "and start a training — the first run pulls the model into the "
-            "cache and it will appear here.",
+            "Models download the first time a run uses them. Start a run on "
+            "the Single run page and its model appears here.",
             size="1",
             style={"color": "var(--bp-muted)"},
         ),
@@ -340,7 +335,7 @@ def models_page() -> rx.Component:
                     rx.cond(
                         ModelsState.last_loaded_at != "",
                         rx.text(
-                            "Loaded at " + ModelsState.last_loaded_at,
+                            "Updated " + ModelsState.last_loaded_label,
                             size="1",
                             style={
                                 "color": "var(--bp-muted-2)",
@@ -351,8 +346,11 @@ def models_page() -> rx.Component:
                     ),
                     direction="column",
                     gap="var(--space-6)",
-                    padding="var(--space-7)",
+                    padding=rx.breakpoints(
+                        initial="var(--space-4)", md="var(--space-6)", xl="var(--space-7)"
+                    ),
                     max_width="1320px",
+                    margin_x="auto",
                     width="100%",
                     on_mount=ModelsState.load_models,
                 ),

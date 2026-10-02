@@ -1047,6 +1047,13 @@ def _estimate_param_count_billions(model_id: str) -> float | None:
     #    prevents that collision).
     pattern = re.compile(r"(\d+(?:\.\d+)?)\s*[Bb](?:[^a-zA-Z]|$)")
     matches = pattern.findall(model_id)
+    if not matches:
+        # Sub-billion ids name their size in millions ("SmolLM2-135M",
+        # "SmolLM2-360M-Instruct"): 135M -> 0.135B.
+        millions = re.findall(r"(\d+(?:\.\d+)?)\s*[Mm](?:[^a-zA-Z]|$)", model_id)
+        sizes = [float(m) / 1000.0 for m in millions if 10.0 <= float(m) < 1000.0]
+        if sizes:
+            return max(sizes)
     if matches:
         try:
             # Pick the largest match — handles "phi-4-mini-3.8b" by
@@ -1064,6 +1071,95 @@ def _estimate_param_count_billions(model_id: str) -> float | None:
             pass
 
     return None
+
+
+#: (max params in billions, hidden, layers, heads): typical decoder shapes
+#: per size class, used by :func:`estimate_vram` when the model's own
+#: config.json is not on disk. The 7B row is the estimator's historical
+#: default (4096 / 32 / 32).
+_SHAPE_BY_SIZE: tuple[tuple[float, int, int, int], ...] = (
+    (0.25, 576, 30, 9),
+    (0.6, 960, 32, 15),
+    (1.5, 2048, 16, 32),
+    (4.5, 3072, 28, 24),
+    (9.5, 4096, 32, 32),
+    (16.0, 5120, 48, 40),
+    (40.0, 5120, 64, 40),
+    (float("inf"), 8192, 80, 64),
+)
+
+
+def _cached_model_config(model: str) -> dict[str, Any] | None:
+    """The model's config.json from a local folder or the Hugging Face cache.
+
+    Never touches the network (``try_to_load_from_cache`` only reads the
+    cache), so the estimate stays instant and offline-safe.
+    """
+    import json as _json
+
+    path: Path | None = None
+    try:
+        local = Path(model).expanduser()
+        if local.is_dir() and (local / "config.json").is_file():
+            path = local / "config.json"
+    except (OSError, ValueError):
+        path = None
+    if path is None and "/" in model and not Path(model).is_absolute():
+        try:
+            from huggingface_hub import try_to_load_from_cache
+
+            hit = try_to_load_from_cache(model, "config.json")
+            if isinstance(hit, str):
+                path = Path(hit)
+        except Exception:  # noqa: BLE001 — hub missing or odd id: no config
+            path = None
+    if path is None:
+        return None
+    try:
+        cfg = _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    cfg = cfg.get("text_config", cfg) if isinstance(cfg, dict) else None
+    return cfg if isinstance(cfg, dict) else None
+
+
+def _params_from_config(cfg: dict[str, Any]) -> float | None:
+    """Parameter count (billions) of a decoder from its config.json."""
+    try:
+        h = int(cfg["hidden_size"])
+        layers = int(cfg["num_hidden_layers"])
+        heads = int(cfg.get("num_attention_heads") or 1)
+        kv = int(cfg.get("num_key_value_heads") or heads)
+        inter = int(cfg.get("intermediate_size") or 4 * h)
+        vocab = int(cfg.get("vocab_size") or 0)
+    except (KeyError, TypeError, ValueError):
+        return None
+    head_dim = h // max(1, heads)
+    attn = h * h * 2 + 2 * h * kv * head_dim
+    mlp = 3 * h * inter
+    embed = vocab * h * (1 if cfg.get("tie_word_embeddings") else 2)
+    return (layers * (attn + mlp) + embed) / 1e9
+
+
+def _varlen_attention_installed() -> bool:
+    """True when flash-attention, or a usable xFormers, is installed.
+
+    Mirrors what training will find: flash-attn has no Windows build, and the
+    trainer disables xFormers where ``settings.windows.xformers_disabled``
+    applies (RTX 40/50 on Windows).
+    """
+    import importlib.util
+
+    try:
+        if importlib.util.find_spec("flash_attn") is not None:
+            return True
+        if os.environ.get("XFORMERS_DISABLED", "").strip() in {"1", "true", "True"}:
+            return False
+        if os.name == "nt" and getattr(settings.windows, "xformers_disabled", False):
+            return False
+        return importlib.util.find_spec("xformers") is not None
+    except Exception:  # noqa: BLE001 - detection only
+        return False
 
 
 def _enforce_full_ft_param_ceiling(
@@ -1250,20 +1346,44 @@ def estimate_vram(
     max_seq_length: int = 2048,
     bytes_per_param: int = 2,  # bf16 / fp16 default; 4 for fp32, 1 for int8, 0.5 for nf4
     quantize_base: bool = True,  # nf4 base + bf16 adapter (the trainer default)
-    hidden_dim: int = 4096,  # 7B-class default; operator can override
-    num_layers: int = 32,  # 7B-class default; operator can override
-    num_heads: int = 32,  # 7B-class default
-    overhead_fraction: float = 0.15,
+    hidden_dim: int | None = None,  # None: the model's config, else its size class
+    num_layers: int | None = None,
+    num_heads: int | None = None,
+    overhead_fraction: float = 0.08,  # allocator slack over the peak (measured ~6%)
     param_count_billions: float | None = None,
     offload: bool = False,
-    vocab_size: int = 152064,  # offload VRAM model only; Qwen2.5-class default
+    vocab_size: int | None = None,  # None: the model's config, else 152064
+    gradient_checkpointing: bool = True,  # the trainer default in both modes
+    target_modules: str | list[str] | None = None,  # None: all-linear (the default)
+    varlen_attention: bool | None = None,  # None: detect flash-attn / xFormers
 ) -> VRAMEstimate:
     """v1.4 BACKEND-F-002: pre-flight VRAM estimator.
 
     Returns a structured estimate before ``.train()`` so an operator can
-    ask "will this config OOM?" instead of finding out at first OOM. The
-    math is back-of-envelope (15% overhead margin); accuracy is within
-    ~10-20% of empirical peak for well-known training configs.
+    ask "will this config OOM?" instead of finding out at first OOM.
+
+    The cost model is fitted to measured peaks (RTX 5090, torch 2.10,
+    transformers 5.5, unsloth 2026.5; 22 probes over six models from 135M to
+    7B, batch 1-8, 1024-4096 token rows, rank 16 and 256). On those probes it
+    is within about 10% of the measured peak, and within 2% on most:
+
+    * weights: 2 bytes/param in 16-bit; in 4-bit the embeddings stay 16-bit
+      and the rest costs ~0.7 bytes/param (Unsloth's dynamic 4-bit keeps some
+      layers in 16-bit);
+    * LoRA adapter: 4 bytes per trainable param, plus ~6.3 bytes per trainable
+      param while training (gradients + optimizer state);
+    * per row, with gradient checkpointing: one layer's attention scores,
+      ``16 * heads * seq^2`` bytes, when attention runs through PyTorch SDPA
+      (no flash-attention / xFormers, i.e. every Windows install), or the
+      fp32 logits ``4 * vocab * seq`` bytes if larger; plus ``35 * hidden *
+      seq`` bytes of activations. Without gradient checkpointing every
+      layer's attention is kept (``* num_layers``);
+    * full fine-tuning: 2 bytes/param of weights plus ~3 bytes/param for
+      gradients and the 8-bit optimizer, and the logits + activations per
+      row (measured on one model; treat as a guide).
+
+    A different GPU, driver or attention backend shifts these numbers; they
+    are an estimate, not a measurement.
 
     Args:
         model: Model identifier — preset name or HF id. Used to estimate
@@ -1281,9 +1401,20 @@ def estimate_vram(
             ``load_in_4bit=True``), the base model is in nf4 (0.5 bytes
             per param) and the LoRA adapter is in bf16 (2 bytes per
             param). When False, the base model uses ``bytes_per_param``.
-        hidden_dim: Model hidden dim (default 4096 — 7B-class).
-        num_layers: Model num_layers (default 32 — 7B-class).
-        num_heads: Model num_heads (default 32 — 7B-class).
+        hidden_dim / num_layers / num_heads / vocab_size: Model shape. When
+            None they come from the model's own config.json if it is on disk
+            (a local folder or the Hugging Face cache; never downloaded),
+            otherwise from the typical shape of its size class
+            (``_SHAPE_BY_SIZE``; 7B-class = 4096 / 32 / 32).
+        gradient_checkpointing: True (the trainer default, LoRA and full)
+            keeps one layer's attention at a time; False
+            (``--no-gradient-checkpointing``, LoRA only) keeps every layer's.
+        target_modules: LoRA targets, ``"all-linear"`` (default) or a list /
+            comma-separated names; sizes the adapter.
+        varlen_attention: whether a variable-length attention kernel
+            (flash-attention, or xFormers on the Unsloth path) is in use, in
+            which case the quadratic attention term is dropped. None detects
+            what this machine has installed.
         overhead_fraction: Fragmentation + framework overhead (default 15%).
         param_count_billions: Optional explicit parameter count. When
             None, estimated via :func:`_estimate_param_count_billions`.
@@ -1293,6 +1424,22 @@ def estimate_vram(
     """
     notes: list[str] = []
 
+    if mode == "full" and quantize_base:
+        # Full fine-tuning never loads a 4-bit base (the trainer trains every
+        # weight in 16-bit), so pricing it as nf4 understated the weights 4x.
+        quantize_base = False
+        notes.append("mode='full' trains a 16-bit base (no nf4)")
+
+    cfg = (
+        _cached_model_config(model)
+        if None in (hidden_dim, num_layers, num_heads, vocab_size, param_count_billions)
+        else None
+    )
+    if param_count_billions is None and cfg is not None:
+        # The model's own shape beats the size in its name ("7B" is 7.62B).
+        param_count_billions = _params_from_config(cfg)
+        if param_count_billions is not None:
+            notes.append(f"param count {param_count_billions:.2f}B from the model's config.json")
     if param_count_billions is None:
         param_count_billions = _estimate_param_count_billions(model)
     if param_count_billions is None:
@@ -1304,86 +1451,94 @@ def estimate_vram(
             f"from model={model!r}; assumed 7.0B (v1.3 canonical 16GB target)."
         )
 
+    if cfg is not None and all(k in cfg for k in ("hidden_size", "num_hidden_layers")):
+        hidden_dim = hidden_dim or int(cfg["hidden_size"])
+        num_layers = num_layers or int(cfg["num_hidden_layers"])
+        num_heads = num_heads or int(cfg.get("num_attention_heads") or 32)
+        vocab_size = vocab_size or int(cfg.get("vocab_size") or 152064)
+        notes.append("shape from the model's config.json")
+    elif None in (hidden_dim, num_layers, num_heads):
+        _limit, s_h, s_l, s_n = next(
+            row for row in _SHAPE_BY_SIZE if param_count_billions <= row[0]
+        )
+        hidden_dim, num_layers, num_heads = hidden_dim or s_h, num_layers or s_l, num_heads or s_n
+    # Every shape value is resolved by now; the fallbacks only narrow types.
+    hidden_dim = int(hidden_dim or 4096)
+    num_layers = int(num_layers or 32)
+    num_heads = int(num_heads or 32)
+    vocab_size = int(vocab_size or 152064)
+
     params = param_count_billions * 1e9
     bytes_to_gb = 1.0 / (1024 ** 3)
+    seq = int(max_seq_length)
+    tied = bool(cfg.get("tie_word_embeddings", True)) if cfg is not None else True
+    embed_params = min(params, float(vocab_size) * hidden_dim * (1 if tied else 2))
+    kv_heads = int((cfg or {}).get("num_key_value_heads") or max(1, num_heads // 4))
+    inter_dim = int((cfg or {}).get("intermediate_size") or 4 * hidden_dim)
+    kv_dim = hidden_dim * kv_heads // max(1, num_heads)
 
-    # 1. Model weights. nf4 base when quantize_base=True (the trainer
-    #    default with load_in_4bit=True); otherwise use bytes_per_param.
+    # 1. Model weights.
     if quantize_base:
-        # nf4: 0.5 bytes per param. The LoRA adapter (if mode='lora')
-        # still lives in bf16 — that's the lora_adapter_gb line.
-        model_weights_gb = (params * 0.5) * bytes_to_gb
-        notes.append("base model quantized to nf4 (0.5 bytes/param)")
+        # 4-bit: embeddings (and an untied head) stay 16-bit; the rest costs
+        # ~0.7 bytes/param measured (bitsandbytes nf4 is 0.5, and Unsloth's
+        # dynamic 4-bit builds keep a share of the layers in 16-bit).
+        model_weights_gb = (embed_params * 2 + (params - embed_params) * 0.7) * bytes_to_gb
+        notes.append("4-bit base: embeddings 16-bit, the rest ~0.7 bytes/param")
     else:
         model_weights_gb = (params * bytes_per_param) * bytes_to_gb
 
-    # 2. LoRA adapter. Per-layer cost = rank * (in_dim + out_dim) * 2 (A + B).
-    #    Modern PEFT applies LoRA to ~7 modules per layer (q, k, v, o, gate,
-    #    up, down for Llama/Qwen-style architectures). Approximate with a
-    #    7-module-per-layer constant.
+    # 2. LoRA adapter (fp32) and 3. what training adds per trainable param.
     if mode == "lora":
-        lora_modules_per_layer = 7
-        lora_adapter_gb = (
-            lora_r
-            * (hidden_dim + hidden_dim)  # in + out (typically same)
-            * num_layers
-            * lora_modules_per_layer
-            * bytes_per_param  # adapters in bf16/fp16 even when base is nf4
-        ) * bytes_to_gb
-    else:
-        lora_adapter_gb = 0.0
-
-    # 3. Optimizer state. paged_adamw_8bit (the trainer default on consumer
-    #    cards) stores 2 momentum buffers per trainable param at 1 byte each.
-    #    Full FT trains the whole model; LoRA only trains the adapter (rank
-    #    * (in + out) * num_layers * 7 modules).
-    trainable_params: float
-    if mode == "lora":
-        trainable_params = lora_r * (hidden_dim + hidden_dim) * num_layers * 7
+        targets = target_modules if target_modules is not None else "all-linear"
+        if isinstance(targets, str):
+            targets = [t.strip() for t in targets.split(",") if t.strip()]
+        if "all-linear" in targets:
+            # q, k, v, o, gate, up, down: sum of (in + out) per layer.
+            dims_per_layer = 9 * hidden_dim + 2 * kv_dim + 3 * inter_dim
+        else:
+            per_module = {
+                "q_proj": 2 * hidden_dim, "o_proj": 2 * hidden_dim,
+                "k_proj": hidden_dim + kv_dim, "v_proj": hidden_dim + kv_dim,
+                "gate_proj": hidden_dim + inter_dim, "up_proj": hidden_dim + inter_dim,
+                "down_proj": hidden_dim + inter_dim,
+            }
+            dims_per_layer = sum(per_module.get(t, 2 * hidden_dim) for t in targets)
+        trainable_params = float(lora_r * dims_per_layer * num_layers)
+        lora_adapter_gb = trainable_params * 4 * bytes_to_gb
+        optimizer_state_gb = trainable_params * 6.3 * bytes_to_gb
     else:
         trainable_params = params
-    # paged 8-bit Adam: 2 buffers * 1 byte + gradient (bytes_per_param)
-    optimizer_state_gb = (
-        trainable_params * (2 * 1 + bytes_per_param)
-    ) * bytes_to_gb
+        lora_adapter_gb = 0.0
+        # Gradients (16-bit) + the paged 8-bit optimizer full mode forces.
+        optimizer_state_gb = trainable_params * 3.0 * bytes_to_gb
 
-    # 4. Activations. With gradient checkpointing the activation memory
-    #    scales as sqrt(num_layers) instead of linearly. Mode='full'
-    #    enables gradient_checkpointing=True by default; mode='lora'
-    #    inherits the setting from settings.lora.use_gradient_checkpointing.
-    activation_layer_factor = (
-        max(1.0, num_layers ** 0.5) if mode == "full"
-        else float(num_layers)
-    )
-    activations_gb = (
-        batch_size
-        * max_seq_length
-        * hidden_dim
-        * activation_layer_factor
-        * bytes_per_param
-        * 2  # forward + backward
-    ) * bytes_to_gb
-    if mode == "full":
+    # 4. Per-row cost. The attention scores of the layer being differentiated
+    #    (SDPA with a dense mask) or the fp32 logits, whichever is larger,
+    #    plus per-token activations.
+    if varlen_attention is None:
+        varlen_attention = _varlen_attention_installed()
+    logits_bytes = 4.0 * vocab_size * seq
+    if mode == "full" or varlen_attention:
+        # The transformers path (full mode) and flash / xFormers kernels do
+        # not materialise the seq x seq scores.
+        attention_bytes = 0.0
+    else:
+        attention_bytes = 16.0 * num_heads * seq * seq
+        if not gradient_checkpointing:
+            attention_bytes *= num_layers
+            notes.append("gradient checkpointing off: every layer's attention is kept")
+    row_bytes = max(attention_bytes, logits_bytes) + 35.0 * hidden_dim * seq
+    activations_gb = batch_size * row_bytes * bytes_to_gb
+    if attention_bytes > logits_bytes:
         notes.append(
-            "mode='full' assumes gradient_checkpointing=True (sqrt(L) "
-            "activation memory)"
+            "attention through PyTorch SDPA (no flash-attention / xFormers): "
+            "memory grows with seq^2 per row"
         )
+    if mode == "full":
+        notes.append("mode='full': measured on one model (135M); treat as a guide")
 
-    # 5. KV cache. batch * seq_len * num_heads * head_dim * num_layers * 2 (k+v)
-    #    bytes_per_param-sized. Training rarely keeps the full KV cache (it's
-    #    primarily an inference cost) but transformers libraries allocate it
-    #    transiently during forward; the constant approximates that share.
-    head_dim = hidden_dim // max(1, num_heads)
-    kv_cache_gb = (
-        batch_size
-        * max_seq_length
-        * num_heads
-        * head_dim
-        * num_layers
-        * 2  # k + v
-        * bytes_per_param
-        * 0.25  # Training amortization factor — full cache not retained
-    ) * bytes_to_gb
+    # 5. Kept for the breakdown's shape; training holds no KV cache.
+    kv_cache_gb = 0.0
 
     # 6. v1.7 FSDP2 CPU-offload (mode='full', full_ft_offload=True). Params +
     #    gradients + optimizer state spill into host RAM; the GPU keeps only the
@@ -1468,6 +1623,59 @@ def estimate_vram(
 # easy to mock in tests too.
 
 
+def _varlen_attention_available(model: Any, *, unsloth_loaded: bool) -> bool:
+    """True when attention can train on a FLATTENED batch in linear memory.
+
+    Padding-free / packed training joins a batch into one sequence of
+    ``batch x seq`` tokens. Only variable-length attention kernels handle
+    that efficiently: flash-attention, or xFormers on the Unsloth path.
+    """
+    attn = str(getattr(getattr(model, "config", None), "_attn_implementation", "") or "")
+    if attn.startswith("flash_attention"):
+        return True
+    if unsloth_loaded:
+        import sys as _sys
+
+        dispatch = _sys.modules.get("unsloth.utils.attention_dispatch")
+        if dispatch is not None and (
+            getattr(dispatch, "HAS_FLASH_ATTENTION", False)
+            or getattr(dispatch, "HAS_XFORMERS", False)
+        ):
+            return True
+    return False
+
+
+def _keep_batches_rectangular(sft_config: Any, model: Any, *, unsloth_loaded: bool) -> bool:
+    """Keep ``(batch, seq)`` batches when no variable-length attention exists.
+
+    Without flash-attention or xFormers (every Windows install: flash-attn
+    has no Windows build and xFormers is disabled on RTX 40/50), a flattened
+    batch is attended through PyTorch SDPA with a dense
+    ``heads x (batch*seq)^2`` mask. Memory then grows with the SQUARE of the
+    batch size: measured on an RTX 5090, a 1B QLoRA at batch 4 x 2048 tokens
+    tried to allocate past 25.7 GiB, hit OOM and fell back to batch 2, where
+    rectangular batches need 9.6 GiB at batch 4 (and 18 GiB at batch 8). On
+    the plain transformers path the flattened batch has no boundary mask at
+    all, which TRL itself warns is unsupported.
+
+    So in that case: padding-free off, and packing (when on) uses TRL's
+    ``wrapped`` strategy, whose rows are ordinary fixed-length sequences.
+    ``--no-packing`` still gives one sample per row. Returns True when the
+    config was changed.
+    """
+    if _varlen_attention_available(model, unsloth_loaded=unsloth_loaded):
+        return False
+    if hasattr(sft_config, "padding_free"):
+        sft_config.padding_free = False
+    if getattr(sft_config, "packing", False):
+        if hasattr(sft_config, "packing_strategy"):
+            sft_config.packing_strategy = "wrapped"
+        # Unsloth's SFTTrainer wrapper otherwise re-enables its own packing
+        # (which flattens); this is the opt-out attribute it reads.
+        sft_config._unsloth_disable_auto_packing = True
+    return True
+
+
 def _build_sft_config(
     output_dir: str,
     per_device_train_batch_size: int,
@@ -1506,6 +1714,11 @@ def _build_sft_config(
     # Wave 6a.5 hotfix rather than fork the helper.
     mode: str = "lora",
     full_ft_offload: bool = False,
+    # ui-v2 P3: ``False`` (``--no-gradient-checkpointing``) forces
+    # ``gradient_checkpointing=False`` on the SFTConfig for mode='lora' (TRL's
+    # default is True, so omitting it is not enough). None / True leave the
+    # config exactly as before; mode='full' ignores it (always checkpoints).
+    gradient_checkpointing: bool | None = None,
 ) -> Any:
     """Assemble an ``SFTConfig`` with the v1.3 quality contracts applied.
 
@@ -1647,6 +1860,10 @@ def _build_sft_config(
         # default for HF gradient checkpointing — avoids the silent bug
         # where reentrant=True breaks DDP gradients on some models.
         kwargs["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
+    elif gradient_checkpointing is False:
+        # --no-gradient-checkpointing (mode='lora'): TRL's SFTConfig defaults
+        # gradient_checkpointing=True, so it must be turned off explicitly.
+        kwargs["gradient_checkpointing"] = False
 
     # v1.7: FSDP2 CPU-offload for the full-FT escape hatch. Spills params +
     # optimizer state into host RAM via fully_shard + CPUOffloadPolicy so a
@@ -2653,6 +2870,27 @@ class Trainer:
         block_order: str | None = None,
         block_writeback: str | None = None,
         block_train_embeddings: bool | None = None,
+        # ui-v2 P3 (CLI parity): per-run overrides the web form passes through
+        # ``backprop train`` / ``backprop multi-run``. All default to None ⇒ the
+        # settings layer governs and a caller who never passes them sees the
+        # exact pre-P3 behavior.
+        #
+        # ``target_modules`` — LoRA target modules for THIS run: a list of
+        # module names or the PEFT wildcard ``"all-linear"``. Overrides
+        # ``settings.lora.target_modules`` in BOTH loaders (unsloth +
+        # transformers/PEFT). mode='full' attaches no adapter, so it is ignored
+        # there.
+        target_modules: str | list[str] | None = None,
+        # ``gradient_checkpointing`` — False turns activation checkpointing off
+        # for THIS run (overrides ``settings.lora.use_gradient_checkpointing``
+        # in the unsloth loader, ``prepare_model_for_kbit_training`` in the
+        # transformers loader, and the SFTConfig flag). None/True keep the
+        # historical behavior. mode='full' always checkpoints (the 16 GB-card
+        # memory contract) and logs one WARNING when asked to turn it off.
+        gradient_checkpointing: bool | None = None,
+        # ``run_name`` — experiment-tracker (W&B / MLflow / TensorBoard) run
+        # name. None keeps the generated ``backprop-<run_id[:12]>``.
+        run_name: str | None = None,
     ) -> None:
         # Use settings as defaults, override with provided values
         # NOTE: Use `is not None` checks instead of falsy `or` to allow
@@ -3068,6 +3306,24 @@ class Trainer:
         # thread into BitsAndBytesConfig / FastLanguageModel.
         self._load_in_4bit_explicit = load_in_4bit is not None
         self._load_in_4bit = load_in_4bit if load_in_4bit is not None else True
+        # ui-v2 P3: per-run overrides (see the __init__ signature). Stored RAW
+        # (None = "defer to settings") and resolved at load / build time so a
+        # settings change between construction and load_model() still applies.
+        self._target_modules_override = target_modules
+        self._gradient_checkpointing_override = gradient_checkpointing
+        self.run_name = run_name
+        if self.mode == "full":
+            if gradient_checkpointing is False:
+                logger.warning(
+                    "gradient_checkpointing=False is ignored with mode='full': "
+                    "full fine-tuning always uses gradient checkpointing "
+                    "(activation-memory contract). Flag ignored."
+                )
+            if target_modules is not None:
+                logger.info(
+                    "target_modules is ignored with mode='full' (no LoRA "
+                    "adapter is attached)."
+                )
         # v1.5 T2.1: FP8-effective state. Stays False unless load_model()
         # successfully converts ≥1 base linear to Float8Linear; the gate ladder
         # below may also force it False (unsupported card / missing lib) BEFORE
@@ -4632,6 +4888,26 @@ class Trainer:
         # torchao install raises RUNTIME_FP8_UNSUPPORTED.
         self._apply_fp8_to_base()
 
+    def _resolved_target_modules(self) -> str | list[str]:
+        """LoRA target modules for this run: the per-run override
+        (``target_modules=`` / ``--target-modules``) when given, else
+        ``settings.lora.target_modules``. Read by BOTH loaders."""
+        override: str | list[str] | None = getattr(self, "_target_modules_override", None)
+        if override is not None:
+            return override
+        resolved: str | list[str] = settings.lora.target_modules
+        return resolved
+
+    def _gradient_checkpointing_disabled(self) -> bool:
+        """True when the operator turned gradient checkpointing OFF for this
+        run (``gradient_checkpointing=False`` / ``--no-gradient-checkpointing``).
+
+        mode='full' never honors it (full fine-tuning always checkpoints)."""
+        return (
+            getattr(self, "_gradient_checkpointing_override", None) is False
+            and self.mode != "full"
+        )
+
     def _load_with_unsloth(self) -> None:
         """Load model using Unsloth for 2x faster training.
 
@@ -4711,8 +4987,9 @@ class Trainer:
         # passing it — keeps the call backward-compatible with older
         # Unsloth releases whose get_peft_model signature doesn't accept
         # the v1.3 kwargs.
+        requested_target_modules = self._resolved_target_modules()
         target_modules = _unsloth_target_modules(
-            settings.lora.target_modules, self._model
+            requested_target_modules, self._model
         )
         if not target_modules:
             # No linear layers found: refuse here so load_model's fallback to
@@ -4720,7 +4997,7 @@ class Trainer:
             raise ModelLoadError(
                 self.model_name,
                 "Failed to apply LoRA: target_modules="
-                f"{settings.lora.target_modules!r} matched no linear layers in "
+                f"{requested_target_modules!r} matched no linear layers in "
                 "the Unsloth-loaded model",
             )
         lora_kwargs: dict[str, Any] = {
@@ -4729,7 +5006,13 @@ class Trainer:
             "lora_alpha": self.lora_alpha,
             "lora_dropout": self.lora_dropout,
             "bias": "none",
-            "use_gradient_checkpointing": settings.lora.use_gradient_checkpointing,
+            # --no-gradient-checkpointing wins over settings.lora.
+            # use_gradient_checkpointing ("unsloth" by default).
+            "use_gradient_checkpointing": (
+                False
+                if self._gradient_checkpointing_disabled()
+                else settings.lora.use_gradient_checkpointing
+            ),
             "random_state": settings.lora.random_state,
         }
         # v1.3 BACKEND-3: forward use_dora only when True so we don't
@@ -4770,7 +5053,7 @@ class Trainer:
         self.lora_adapted_modules = _count_lora_layers(self._model)
         logger.info(
             "Unsloth LoRA: target_modules=%s (from %r); %d modules adapted.",
-            target_modules, settings.lora.target_modules,
+            target_modules, requested_target_modules,
             self.lora_adapted_modules,
         )
 
@@ -4917,7 +5200,17 @@ class Trainer:
         # non-quantized model and still enables gradient checkpointing + input
         # grads, so it runs for both LoRA variants (byte-identical to pre-v1.5
         # for the 4-bit path).
-        self._model = prepare_model_for_kbit_training(self._model)
+        #
+        # --no-gradient-checkpointing: prepare_model_for_kbit_training turns
+        # gradient checkpointing on by default, so the opt-out must be passed
+        # here (the SFTConfig flag is handled in _build_sft_config). Only
+        # forwarded when the operator asked, so the default call is unchanged.
+        if self._gradient_checkpointing_disabled():
+            self._model = prepare_model_for_kbit_training(
+                self._model, use_gradient_checkpointing=False
+            )
+        else:
+            self._model = prepare_model_for_kbit_training(self._model)
 
         # Apply LoRA. v1.3 BACKEND-3 / BACKEND-6: thread use_dora and
         # init_lora_weights through to PEFT. Built as a kwargs dict so
@@ -4925,10 +5218,11 @@ class Trainer:
         # that doesn't accept the field doesn't make us crash on this
         # call. The trainer logs a warning + carries on with vanilla
         # LoRA when the kwarg is rejected.
+        requested_target_modules = self._resolved_target_modules()
         lora_kwargs: dict[str, Any] = {
             "r": self.lora_r,
             "lora_alpha": self.lora_alpha,
-            "target_modules": settings.lora.target_modules,
+            "target_modules": requested_target_modules,
             "lora_dropout": self.lora_dropout,
             "bias": "none",
             "task_type": "CAUSAL_LM",
@@ -4974,7 +5268,7 @@ class Trainer:
         self.lora_adapted_modules = _count_lora_layers(self._model)
         logger.info(
             "PEFT LoRA: target_modules=%r; %d modules adapted.",
-            settings.lora.target_modules, self.lora_adapted_modules,
+            requested_target_modules, self.lora_adapted_modules,
         )
 
     def _build_trainer(
@@ -5286,6 +5580,8 @@ class Trainer:
             # v1.7: thread the FSDP2 CPU-offload opt-in so _build_sft_config
             # wires fsdp/fsdp_config for the full-FT escape hatch.
             full_ft_offload=self.full_ft_offload,
+            # ui-v2 P3: --no-gradient-checkpointing (None otherwise).
+            gradient_checkpointing=getattr(self, "_gradient_checkpointing_override", None),
         )
         # v1.5 T2.1 (FP8): layer the FP8 shape requirement ON TOP of the built
         # SFTConfig rather than threading fp8 into _build_sft_config (which
@@ -5302,6 +5598,16 @@ class Trainer:
         if self._fp8_effective:
             _set = self._set_fp8_shape_constraints_on_sft_config
             _set(sft_config)
+        if _keep_batches_rectangular(
+            sft_config, self._model, unsloth_loaded=bool(self.use_unsloth)
+        ) and not getattr(self, "_rectangular_logged", False):
+            self._rectangular_logged = True
+            logger.info(
+                "No flash-attention or xFormers attention available: keeping "
+                "batches rectangular%s so attention memory grows linearly with "
+                "the batch size.",
+                " (wrapped packing)" if getattr(sft_config, "packing", False) else "",
+            )
         return sft_config
 
     @staticmethod
@@ -5744,7 +6050,12 @@ class Trainer:
             except Exception as exc:
                 logger.warning(f"Resume lookup failed: {exc}")
         run_id = run_id_for_resume or uuid.uuid4().hex
-        run_name = f"backprop-{run_id[:12]}" if report_to != "none" else None
+        # ui-v2 P3: --run-name overrides the generated tracker run name.
+        run_name = (
+            (getattr(self, "run_name", None) or f"backprop-{run_id[:12]}")
+            if report_to != "none"
+            else None
+        )
 
         # v1.3 BACKEND-5 / BACKEND-7 + Wave 6a BACKEND-A-003: training-args
         # assembly is delegated to a module-level helper so the same defaults

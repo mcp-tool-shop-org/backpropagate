@@ -66,6 +66,27 @@ UI_EXPORT_FORMATS = ("lora", "merged", "gguf")
 UI_GGUF_QUANTS = ("f16", "q8_0", "q5_k_m", "q4_k_m", "q4_0", "q2_k")
 #: Multi-run merge choices the UI offers, mapped to CLI flags in the argv.
 UI_MERGE_CHOICES = ("slao", "simple", "ties")
+#: Training objectives (``--method``) and the per-method knobs the UI may
+#: send, keyed to their CLI flag and allowed range (ui-v2 P3).
+UI_METHODS = ("sft", "orpo", "simpo", "kto")
+UI_METHOD_PARAMS: dict[str, dict[str, tuple[str, float, float]]] = {
+    "sft": {},
+    "orpo": {"orpo_beta": ("--orpo-beta", 0.0, 10.0)},
+    "simpo": {
+        "simpo_beta": ("--simpo-beta", 0.0, 50.0),
+        "simpo_gamma": ("--simpo-gamma", 0.0, 50.0),
+    },
+    "kto": {
+        "kto_beta": ("--kto-beta", 0.0, 10.0),
+        "kto_desirable_weight": ("--kto-desirable-weight", 0.0, 100.0),
+        "kto_undesirable_weight": ("--kto-undesirable-weight", 0.0, 100.0),
+    },
+}
+#: ``--gpu-max-temp`` range the CLI accepts (°C).
+UI_GPU_TEMP_RANGE = (50.0, 105.0)
+MAX_UI_LORA_ALPHA = 1024
+_TARGET_MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+_RUN_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _OLLAMA_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 
 #: Cooperative-stop grace floor; the live window is
@@ -88,9 +109,9 @@ class JobRefusedError(RuntimeError):
 class JobSpec:
     """Everything needed to build the child argv.
 
-    Only knobs the ``backprop train`` CLI actually exposes are carried here;
-    UI-form fields without a CLI flag (lora_alpha, target_modules, epochs)
-    are a P3 CLI-parity item, not smuggled through the back door.
+    Only knobs the ``backprop train`` / ``multi-run`` CLI actually exposes
+    are carried here: every field maps to a real flag (ui-v2 P3 CLI parity),
+    nothing is smuggled to the child through the back door.
     """
 
     kind: str  # "sft" (P1); "multi_run" / "export" (P2)
@@ -100,8 +121,18 @@ class JobSpec:
     batch: str = "auto"  # "auto" or a positive-int string
     lr: float = 2e-4
     lora_r: int = 256
-    mode: str = "lora"  # the CLI's train modes are lora|full; full ships in P3
+    mode: str = "lora"  # --mode lora|full (full: single run, SFT only)
     samples: int | None = None
+    # ---- training knobs (P3 CLI parity; None/"" = the CLI default) -----
+    lora_alpha: int | None = None  # --lora-alpha
+    lora_dropout: float | None = None  # --lora-dropout
+    target_modules: str = ""  # --target-modules ("q_proj,v_proj" | "all-linear")
+    base_4bit: bool = True  # False -> --no-4bit (16-bit LoRA base)
+    method: str = "sft"  # --method, one of UI_METHODS
+    method_params: dict[str, float] = field(default_factory=dict)  # --orpo-beta ...
+    run_name: str = ""  # --run-name
+    gpu_max_temp: float | None = None  # --gpu-max-temp
+    gradient_checkpointing: bool = True  # False -> --no-gradient-checkpointing
     scratch_root: str | None = None  # override for tests; default sandboxed
     output_dir: str | None = None  # default: <run_dir>/output
     trust_remote_code: bool = False
@@ -204,6 +235,37 @@ def _build_train_argv(spec: JobSpec, run_dir: Path) -> list[str]:
         argv += ["--batch-size", str(spec.batch)]
     if spec.samples:
         argv += ["--samples", str(spec.samples)]
+    return argv + _training_flags(spec)
+
+
+def _training_flags(spec: JobSpec) -> list[str]:
+    """The P3 CLI-parity flags shared by ``train`` and ``multi-run``.
+
+    Each is passed only when it differs from the CLI default, so the argv
+    (and the job.json record) stays short and a default form reproduces a
+    default CLI run exactly.
+    """
+    argv: list[str] = []
+    if spec.mode == "lora":
+        if spec.lora_alpha is not None:
+            argv += ["--lora-alpha", str(int(spec.lora_alpha))]
+        if spec.lora_dropout is not None:
+            argv += ["--lora-dropout", f"{float(spec.lora_dropout):g}"]
+        if spec.target_modules:
+            argv += ["--target-modules", spec.target_modules]
+        if not spec.base_4bit:
+            argv += ["--no-4bit"]
+    if spec.method != "sft":
+        argv += ["--method", spec.method]
+        for key, (flag, _lo, _hi) in UI_METHOD_PARAMS[spec.method].items():
+            if key in spec.method_params:
+                argv += [flag, f"{float(spec.method_params[key]):g}"]
+    if spec.run_name:
+        argv += ["--run-name", spec.run_name]
+    if spec.gpu_max_temp is not None:
+        argv += ["--gpu-max-temp", f"{float(spec.gpu_max_temp):g}"]
+    if not spec.gradient_checkpointing and spec.mode == "lora":
+        argv += ["--no-gradient-checkpointing"]
     return argv
 
 
@@ -231,13 +293,16 @@ def _build_multi_run_argv(spec: JobSpec, run_dir: Path) -> list[str]:
     ]
     if spec.samples:
         argv += ["--samples", str(spec.samples)]
+    argv += ["--lr", str(spec.lr), "--lora-r", str(spec.lora_r)]
+    if spec.batch != "auto":
+        argv += ["--batch-size", str(spec.batch)]
     if spec.merge == "simple":
         argv += ["--merge-mode", "simple"]
     else:
         argv += ["--merge-mode", "slao"]
         if spec.merge == "ties":
             argv += ["--merge-strategy", "ties"]
-    return argv
+    return argv + _training_flags(spec)
 
 
 def _build_export_argv(spec: JobSpec, run_dir: Path) -> list[str]:
@@ -366,16 +431,126 @@ def _validate_spec(spec: JobSpec) -> None:
         raise JobValidationError(f"lora_r must be 1..{MAX_UI_LORA_R} (got {spec.lora_r}).")
     if spec.mode not in ("lora", "full"):
         raise JobValidationError(f"Unknown mode {spec.mode!r}.")
-    if spec.mode == "full":
-        raise JobValidationError(
-            "Full fine-tuning from the UI lands in P3; use LoRA mode "
-            "(the CLI has `--mode full`)."
-        )
+    _validate_training_knobs(spec)
     if spec.trust_remote_code:
         raise JobValidationError(
-            "trust_remote_code is not available from the UI yet (P3 gates it "
-            "behind an explicit server flag for remote surfaces)."
+            "trust_remote_code is not available from the UI; run models that "
+            "need it from the CLI."
         )
+
+
+def _validate_training_knobs(spec: JobSpec) -> None:
+    """Server-side checks for the P3 CLI-parity knobs (handoff rule 7)."""
+    if spec.method not in UI_METHODS:
+        raise JobValidationError(
+            f"Unknown method {spec.method!r}; one of {', '.join(UI_METHODS)}."
+        )
+    if spec.mode == "full":
+        if spec.kind != "sft":
+            raise JobValidationError("Full fine-tuning runs as a single run, not a multi-run.")
+        if spec.method != "sft":
+            raise JobValidationError(
+                f"{spec.method.upper()} trains a LoRA adapter; full fine-tuning "
+                "supports SFT only."
+            )
+    allowed = UI_METHOD_PARAMS[spec.method]
+    for key, value in dict(spec.method_params or {}).items():
+        if key not in allowed:
+            raise JobValidationError(f"{key} does not apply to {spec.method.upper()}.")
+        _flag, lo, hi = allowed[key]
+        if not (lo < float(value) <= hi):
+            raise JobValidationError(f"{key} must be in ({lo:g}, {hi:g}] (got {value}).")
+    if spec.lora_alpha is not None and not (1 <= int(spec.lora_alpha) <= MAX_UI_LORA_ALPHA):
+        raise JobValidationError(
+            f"lora_alpha must be 1..{MAX_UI_LORA_ALPHA} (got {spec.lora_alpha})."
+        )
+    if spec.lora_dropout is not None and not (0.0 <= float(spec.lora_dropout) < 1.0):
+        raise JobValidationError(f"lora_dropout must be in [0, 1) (got {spec.lora_dropout}).")
+    if spec.target_modules and spec.target_modules != "all-linear":
+        parts = spec.target_modules.split(",")
+        if len(parts) > 32 or not all(_TARGET_MODULE_RE.match(p) for p in parts):
+            raise JobValidationError(
+                f"target_modules must be 'all-linear' or up to 32 comma-separated "
+                f"module names (got {spec.target_modules!r})."
+            )
+    if spec.run_name and not _RUN_NAME_RE.match(spec.run_name):
+        raise JobValidationError(
+            "Run name: up to 128 letters, digits, dots, underscores or dashes."
+        )
+    if spec.gpu_max_temp is not None:
+        lo, hi = UI_GPU_TEMP_RANGE
+        if not (lo <= float(spec.gpu_max_temp) <= hi):
+            raise JobValidationError(
+                f"GPU temperature limit must be {lo:g}..{hi:g} °C (got {spec.gpu_max_temp})."
+            )
+
+
+def vram_verdict(
+    model: str,
+    *,
+    mode: str = "lora",
+    lora_r: int = 256,
+    batch: str = "auto",
+    base_4bit: bool = True,
+    gradient_checkpointing: bool = True,
+    target_modules: str = "",
+    card_gb: float | None = None,
+) -> dict[str, Any]:
+    """The inline "fits / tight / won't fit" estimate for the training forms.
+
+    The numbers are exactly ``backprop estimate-vram <model> --mode <mode>
+    --lora-r <r> --batch-size <b> [--target-modules <t>] [--no-4bit]
+    [--no-gradient-checkpointing]``: the same
+    :func:`backpropagate.trainer.estimate_vram` call, and for ``batch="auto"``
+    the batch the CLI's tier table recommends for this card (what the
+    trainer's auto batch picks). Verdict: ``fits`` up to 85 % of the card,
+    ``tight`` up to 100 %, ``wont_fit`` above. Never raises: ``unknown``
+    with a reason when there is no card or no estimate.
+    """
+    out: dict[str, Any] = {
+        "verdict": "unknown",
+        "total_gb": None,
+        "card_gb": card_gb,
+        "batch": None,
+        "note": "",
+    }
+    try:
+        if not card_gb or card_gb <= 0:
+            out["note"] = "No CUDA GPU detected, so there is nothing to compare against."
+            return out
+        if batch == "auto":
+            from .cli import _VRAM_BATCH_SIZE_TIERS, _VRAM_TIER_TOLERANCE_GB
+
+            resolved = _VRAM_BATCH_SIZE_TIERS[-1][1]
+            for threshold, bs, _note in _VRAM_BATCH_SIZE_TIERS:
+                if card_gb + _VRAM_TIER_TOLERANCE_GB >= threshold:
+                    resolved = bs
+                    break
+        else:
+            resolved = int(batch)
+        out["batch"] = resolved
+        from .trainer import estimate_vram
+
+        kwargs: dict[str, Any] = {"mode": mode, "lora_r": int(lora_r), "batch_size": resolved}
+        if not base_4bit and mode == "lora":
+            kwargs["quantize_base"] = False
+        if not gradient_checkpointing:
+            kwargs["gradient_checkpointing"] = False
+        if target_modules and mode == "lora":
+            kwargs["target_modules"] = target_modules
+        estimate = estimate_vram(model, **kwargs)
+        total = float(getattr(estimate, "total_gb", 0.0) or 0.0)
+        if total <= 0:
+            out["note"] = "No estimate for this model."
+            return out
+        out["total_gb"] = round(total, 2)
+        ratio = total / card_gb
+        out["verdict"] = "fits" if ratio <= 0.85 else "tight" if ratio <= 1.0 else "wont_fit"
+    except Exception as exc:  # noqa: BLE001 — the estimate is advisory
+        logger.debug("vram_verdict failed: %r", exc)
+        out["verdict"] = "unknown"
+        out["note"] = "The estimate is unavailable for this model."
+    return out
 
 
 def _vram_preflight(spec: JobSpec) -> tuple[bool, str]:
@@ -399,6 +574,9 @@ def _vram_preflight(spec: JobSpec) -> tuple[bool, str]:
             mode=spec.mode,
             lora_r=int(spec.lora_r),
             batch_size=1 if spec.batch == "auto" else int(spec.batch),
+            quantize_base=bool(spec.base_4bit) or spec.mode != "lora",
+            gradient_checkpointing=bool(spec.gradient_checkpointing),
+            target_modules=spec.target_modules or None,
         )
         estimate_gb = float(getattr(estimate, "total_gb", 0.0) or 0.0)
         if estimate_gb <= 0:

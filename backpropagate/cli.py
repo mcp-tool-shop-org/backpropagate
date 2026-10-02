@@ -382,6 +382,223 @@ def _unit_float(value: str) -> float:
     return n
 
 
+def _lora_dropout_float(value: str) -> float:
+    """argparse type for ``--lora-dropout``: a float with 0 <= x < 1."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"expected a float, got {value!r}")
+    if n != n or n < 0.0 or n >= 1.0:  # n != n: NaN
+        raise argparse.ArgumentTypeError(
+            f"must satisfy 0 <= dropout < 1, got {value!r} (typical: 0.0-0.1)"
+        )
+    return n
+
+
+GPU_MAX_TEMP_MIN_C = 50.0
+GPU_MAX_TEMP_MAX_C = 105.0
+
+
+def _gpu_max_temp_float(value: str) -> float:
+    """argparse type for ``--gpu-max-temp``: degrees C in [50, 105]."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"expected a temperature in C, got {value!r}")
+    if n != n or n < GPU_MAX_TEMP_MIN_C or n > GPU_MAX_TEMP_MAX_C:
+        raise argparse.ArgumentTypeError(
+            f"must be between {GPU_MAX_TEMP_MIN_C:g} and {GPU_MAX_TEMP_MAX_C:g} C, "
+            f"got {value!r} (a typical limit is 85)"
+        )
+    return n
+
+
+# One dot-separated module name: identifier-ish segments, e.g. ``q_proj`` or
+# ``model.layers.0.self_attn.q_proj`` (the first character must not be a digit).
+_TARGET_MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)*$")
+
+
+def _parse_target_modules(value: str) -> "str | list[str]":
+    """Parse ``--target-modules``: ``all-linear`` or a comma-separated list.
+
+    Whitespace around entries is stripped. Empty entries (``q_proj,,v_proj``,
+    a trailing comma) and names that are not (dotted) identifiers are rejected
+    with the structured ``INPUT_VALIDATION_FAILED`` error. ``all-linear`` is
+    PEFT's wildcard and cannot be mixed with explicit names.
+
+    Returns:
+        The string ``"all-linear"``, or a de-duplicated list of module names.
+    """
+    text = (value or "").strip()
+    if not text:
+        raise UserInputError(
+            "--target-modules is empty.",
+            hint="Pass comma-separated module names (e.g. q_proj,v_proj) or all-linear.",
+            code="INPUT_VALIDATION_FAILED",
+        )
+    if text.lower() == "all-linear":
+        return "all-linear"
+    names = [part.strip() for part in text.split(",")]
+    if any(not name for name in names):
+        raise UserInputError(
+            f"--target-modules has an empty entry: {value!r}.",
+            hint="Remove the stray comma, e.g. --target-modules q_proj,v_proj.",
+            code="INPUT_VALIDATION_FAILED",
+        )
+    bad = [name for name in names if not _TARGET_MODULE_RE.match(name)]
+    if bad:
+        raise UserInputError(
+            f"--target-modules has invalid module name(s): {', '.join(map(repr, bad))}.",
+            hint=(
+                "Use identifiers such as q_proj, k_proj, v_proj, o_proj, gate_proj, "
+                "up_proj, down_proj (dots allowed for nested names), or all-linear."
+            ),
+            code="INPUT_VALIDATION_FAILED",
+        )
+    if any(name.lower() == "all-linear" for name in names):
+        raise UserInputError(
+            "--target-modules: all-linear cannot be combined with explicit module names.",
+            hint="Pass either all-linear on its own or a list of module names.",
+            code="INPUT_VALIDATION_FAILED",
+        )
+    return list(dict.fromkeys(names))
+
+
+def _add_p3_training_args(parser: argparse.ArgumentParser, *, multi: bool) -> None:
+    """Add the ui-v2 P3 per-run training knobs shared by ``train`` and ``multi-run``.
+
+    These exist so every field of the web UI's run form has a real CLI twin: the
+    UI launches ``python -m backpropagate train|multi-run ...`` and passes each
+    knob as a flag. All default to "not set" and are forwarded to the Trainer
+    only when given, so a command line without them is unchanged.
+    """
+    parser.add_argument(
+        "--lora-alpha",
+        type=_positive_int,
+        default=None,
+        metavar="INT",
+        help=(
+            "LoRA alpha (scaling). Must be > 0. Default: the settings value "
+            "(BACKPROPAGATE_LORA__LORA_ALPHA, 512). LoRA mode only."
+        ),
+    )
+    parser.add_argument(
+        "--lora-dropout",
+        type=_lora_dropout_float,
+        default=None,
+        metavar="FLOAT",
+        help=(
+            "LoRA dropout, 0 <= x < 1. Default: the settings value "
+            "(BACKPROPAGATE_LORA__LORA_DROPOUT, 0.05). LoRA mode only."
+        ),
+    )
+    parser.add_argument(
+        "--target-modules",
+        default=None,
+        metavar="TEXT",
+        help=(
+            "LoRA target modules for this run: comma-separated module names "
+            "(e.g. q_proj,v_proj) or the literal all-linear. Overrides the "
+            "settings value (and --lora-preset's modules) for this run only. "
+            "LoRA mode only."
+        ),
+    )
+    parser.add_argument(
+        "--no-4bit",
+        action="store_true",
+        help=(
+            "Load the base model unquantized (16-bit) for LoRA instead of 4-bit "
+            "QLoRA. Needs more VRAM. Ignored with --mode full (full fine-tuning "
+            "already loads unquantized)."
+        ),
+    )
+    parser.add_argument(
+        "--run-name",
+        default=None,
+        metavar="NAME",
+        help=(
+            (
+                "Experiment-tracker run name (W&B, MLflow, TensorBoard). Each run "
+                "is reported as NAME-run1, NAME-run2, ... Default: a generated "
+                "backprop-<run_id>-run-NNN."
+            )
+            if multi
+            else (
+                "Experiment-tracker run name (W&B, MLflow, TensorBoard). "
+                "Default: a generated backprop-<run_id>."
+            )
+        ),
+    )
+    parser.add_argument(
+        "--no-gradient-checkpointing",
+        action="store_true",
+        help=(
+            "Turn gradient checkpointing off (faster, uses more VRAM). Ignored "
+            "with --mode full, which always checkpoints (logs a warning)."
+        ),
+    )
+    parser.add_argument(
+        "--gpu-max-temp",
+        type=_gpu_max_temp_float,
+        default=None,
+        metavar="C",
+        help=(
+            "Stop the run cleanly (saving a checkpoint) when the GPU stays at or "
+            "above this temperature in C for 3 consecutive readings taken every "
+            "5 seconds. Range 50-105. Off by default"
+            + (
+                ". For multi-run it ends the whole session."
+                if multi
+                else "."
+            )
+        ),
+    )
+
+
+def _p3_trainer_overrides(args: argparse.Namespace) -> dict[str, Any]:
+    """Trainer kwargs for the ui-v2 P3 flags the operator actually set.
+
+    Unset flags are omitted entirely (never forwarded as ``None``), so the
+    Trainer's own defaults govern and a command line without them is
+    byte-identical to before.
+
+    Raises:
+        UserInputError: ``--target-modules`` is malformed.
+    """
+    out: dict[str, Any] = {}
+    if getattr(args, "lora_alpha", None) is not None:
+        out["lora_alpha"] = args.lora_alpha
+    if getattr(args, "lora_dropout", None) is not None:
+        out["lora_dropout"] = args.lora_dropout
+    if getattr(args, "target_modules", None) is not None:
+        out["target_modules"] = _parse_target_modules(args.target_modules)
+    if getattr(args, "no_4bit", False):
+        out["load_in_4bit"] = False
+    if getattr(args, "run_name", None):
+        out["run_name"] = args.run_name
+    if getattr(args, "no_gradient_checkpointing", False):
+        out["gradient_checkpointing"] = False
+    return out
+
+
+# MultiRunConfig decays the learning rate initial_lr (2e-4) -> final_lr (5e-5).
+# `backprop multi-run --lr X` sets initial_lr=X and final_lr=X * this ratio so
+# the decay keeps its default shape. A test pins it to the dataclass defaults.
+_MULTI_RUN_FINAL_LR_RATIO = 0.25
+
+
+def _make_gpu_temp_callback(
+    args: argparse.Namespace, on_trip: Callable[[str], None]
+) -> Any:
+    """The ``--gpu-max-temp`` stop callback, or None when the flag is unset."""
+    limit = getattr(args, "gpu_max_temp", None)
+    if limit is None:
+        return None
+    from .gpu_safety import build_gpu_temp_stop_callback
+
+    return build_gpu_temp_stop_callback(float(limit), on_trip=on_trip)
+
+
 # BRIDGE-B-005 (Stage C humanization): tighten --auth parsing so a malformed
 # value fails on the argparse side with a humanized error that names the
 # offending character class. Pre-fix the only validation was downstream in
@@ -746,6 +963,9 @@ class _UiJob:
         self.callback: Any = None  # UiFileEventCallback, when the body trains
         self.output_path: str | None = None
         self.steps_done: int = 0
+        # Set by the --gpu-max-temp callback's on_trip; makes the terminal
+        # ``done`` event ``stopped`` with this ``reason``.
+        self.safety_reason: str | None = None
 
 
 _UI_ERROR_CODE_RE = re.compile(r"\[([A-Z][A-Z0-9]*_[A-Z0-9_]+)\]")
@@ -809,16 +1029,25 @@ def _run_as_ui_job(
         job.steps_done = int(getattr(job.callback, "last_step", None) or 0)
     stopped = read_stop_request(job.run_dir)
     if rc in (EXIT_OK, EXIT_PARTIAL_SUCCESS, EXIT_INTERRUPTED):
-        status = "stopped" if (stopped or rc == EXIT_INTERRUPTED) else "done"
-        job.writer.phase("done")
-        job.writer.done(
-            status=status, steps_done=job.steps_done, output_path=job.output_path
+        reason = job.safety_reason
+        status = (
+            "stopped" if (stopped or rc == EXIT_INTERRUPTED or reason) else "done"
         )
+        job.writer.phase("done")
+        done_extra: dict[str, Any] = {"reason": reason} if reason else {}
+        job.writer.done(
+            status=status,
+            steps_done=job.steps_done,
+            output_path=job.output_path,
+            **done_extra,
+        )
+        extra_job_fields: dict[str, Any] = {"stop_reason": reason} if reason else {}
         _ui_job_update(
             job.run_dir,
             status=status,
             exit_code=rc,
             output_path=job.output_path or "",
+            **extra_job_fields,
         )
     else:
         code, message = _ui_failure_from_log(job.run_dir, rc)
@@ -1028,6 +1257,12 @@ def cmd_train(args: argparse.Namespace) -> int:
             # is unchanged; "none" is the CLI's only way to turn tracking off.
             "report_to": getattr(args, "report_to", "auto"),
         }
+        # ui-v2 P3: the per-run knobs the web form passes (--lora-alpha,
+        # --lora-dropout, --target-modules, --no-4bit, --run-name,
+        # --no-gradient-checkpointing). Only the ones the operator set are
+        # present, so a plain `backprop train` is unchanged. They go through the
+        # same introspection filter below as every other Trainer kwarg.
+        wave6b_candidate_kwargs.update(_p3_trainer_overrides(args))
         # v1.6 C4: the SimPO/KTO hyperparameter flags default to None on the
         # argparse side ("operator did not set it"). Drop the unset ones so the
         # config's own field defaults govern rather than forwarding None (which
@@ -1097,8 +1332,25 @@ def cmd_train(args: argparse.Namespace) -> int:
         }
         # ui-v2 P1: only pass the kwarg when the UI spawned us — keeps mocked
         # Trainer doubles (which predate the extra_callbacks param) green.
-        if ui_callback is not None:
-            train_kwargs["extra_callbacks"] = [ui_callback]
+        extra_callbacks: list[Any] = [ui_callback] if ui_callback is not None else []
+
+        # --gpu-max-temp: cooperative stop (same path as a UI Stop) when the GPU
+        # stays too hot. A UI job also gets a `safety` event; the terminal `done`
+        # event then reports status="stopped" + the same reason.
+        safety_reason: list[str] = []
+
+        def _on_temp_trip(reason: str) -> None:
+            safety_reason.append(reason)
+            if ui_writer is not None:
+                ui_writer.safety(reason)
+            print()
+            _print_warning(f"GPU temperature limit reached: {reason}. Saving and stopping.")
+
+        temp_callback = _make_gpu_temp_callback(args, _on_temp_trip)
+        if temp_callback is not None:
+            extra_callbacks.append(temp_callback)
+        if extra_callbacks:
+            train_kwargs["extra_callbacks"] = extra_callbacks
         result = trainer.train(**train_kwargs)
 
         progress.finish()
@@ -1115,11 +1367,15 @@ def cmd_train(args: argparse.Namespace) -> int:
             # difference between "finished early on request" and "completed".
             from .job_events import read_stop_request
 
+            # A --gpu-max-temp trip is also a "stopped" run; its text rides on
+            # the terminal event as ``reason``.
+            trip_reason = safety_reason[0] if safety_reason else None
             final_status = (
                 "stopped"
-                if ui_run_dir and read_stop_request(str(ui_run_dir))
+                if trip_reason or (ui_run_dir and read_stop_request(str(ui_run_dir)))
                 else "done"
             )
+            done_extra: dict[str, Any] = {"reason": trip_reason} if trip_reason else {}
             ui_writer.done(
                 status=final_status,
                 # The step actually reached — NOT the requested total. The
@@ -1131,13 +1387,16 @@ def cmd_train(args: argparse.Namespace) -> int:
                     else int(getattr(result, "steps", 0) or 0)
                 ),
                 output_path=str(saved_dir),
+                **done_extra,
             )
+            job_extra: dict[str, Any] = {"stop_reason": trip_reason} if trip_reason else {}
             _ui_job_update(
                 ui_run_dir,
                 run_id=str(getattr(result, "run_id", None) or cli_run_id_full),
                 output_path=str(saved_dir),
                 status=final_status,
                 exit_code=EXIT_OK,
+                **job_extra,
             )
 
         print()
@@ -1432,6 +1691,26 @@ def _cmd_multi_run_body(args: argparse.Namespace) -> int:
             # Trainer), so the inspect filter routes it to the trainer side.
             "report_to": getattr(args, "report_to", "auto"),
         }
+        # ui-v2 P3: the per-session knobs the web form passes. MultiRunConfig
+        # declares every one of these as a real dataclass field (lora_r,
+        # lora_alpha, lora_dropout, batch_size, target_modules, load_in_4bit,
+        # gradient_checkpointing, run_name, initial_lr, final_lr), so the
+        # dataclasses.fields() filter below routes them to the config instead of
+        # dropping them. Unset flags are omitted, so a plain `backprop multi-run`
+        # is unchanged.
+        wave6b_candidate_kwargs.update(_p3_trainer_overrides(args))
+        if getattr(args, "lora_r", None) is not None:
+            wave6b_candidate_kwargs["lora_r"] = args.lora_r
+        _mr_batch = getattr(args, "batch_size", None)
+        if _mr_batch is not None and _mr_batch != "auto":
+            wave6b_candidate_kwargs["batch_size"] = _mr_batch
+        _mr_lr = getattr(args, "lr", None)
+        if _mr_lr is not None:
+            # --lr is the STARTING learning rate; the sweep still decays it
+            # (linear by default). Keep the default 2e-4 -> 5e-5 decay ratio so
+            # the schedule shape is unchanged instead of pinning the end at 5e-5.
+            wave6b_candidate_kwargs["initial_lr"] = float(_mr_lr)
+            wave6b_candidate_kwargs["final_lr"] = float(_mr_lr) * _MULTI_RUN_FINAL_LR_RATIO
         # v1.6 C4: drop the SimPO/KTO hyperparameter keys when unset (None) so
         # the config field defaults govern instead of clobbering them with None
         # (mirrors cmd_train's _optional_none_keys filter).
@@ -1491,6 +1770,34 @@ def _cmd_multi_run_body(args: argparse.Namespace) -> int:
                 "on_run_start": _ui_on_run_start,
             }
 
+        # --gpu-max-temp: the temperature callback rides on EVERY run's inner
+        # SFTTrainer (extra_callbacks). A trip saves the current run and ends the
+        # whole session by calling trainer.abort — the same hook a UI Stop uses.
+        # The trainer does not exist yet when the callback is built, hence the
+        # holder.
+        trainer_holder: list[Any] = []
+        trip_reasons: list[str] = []
+
+        def _on_temp_trip(reason: str) -> None:
+            trip_reasons.append(reason)
+            if ui_job is not None:
+                ui_job.safety_reason = reason
+                ui_job.writer.safety(reason)
+            print()
+            _print_warning(
+                f"GPU temperature limit reached: {reason}. "
+                "Saving and ending the session."
+            )
+            if trainer_holder:
+                trainer_holder[0].abort(reason)
+
+        temp_callback = _make_gpu_temp_callback(args, _on_temp_trip)
+        if temp_callback is not None:
+            ui_trainer_kwargs["extra_callbacks"] = [
+                *ui_trainer_kwargs.get("extra_callbacks", []),
+                temp_callback,
+            ]
+
         trainer = MultiRunTrainer(
             model=args.model,
             config=config,
@@ -1499,6 +1806,7 @@ def _cmd_multi_run_body(args: argparse.Namespace) -> int:
             **wave6b_trainer_kwargs,
             **ui_trainer_kwargs,
         )
+        trainer_holder.append(trainer)
         if ui_job is not None:
             ui_job.callback.on_stop = trainer.abort
 
@@ -7134,15 +7442,31 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
     cli_lora_r = getattr(args, "lora_r", None)
     cli_batch_size = getattr(args, "batch_size", None)
     cli_offload = bool(getattr(args, "full_ft_offload", False))
-    if cli_batch_size is not None or mode == "full" or cli_offload:
+    # --no-4bit: price the base model unquantized (16-bit) instead of nf4 QLoRA.
+    cli_quantize_base = not bool(getattr(args, "no_4bit", False))
+    if (
+        cli_batch_size is not None
+        or mode == "full"
+        or cli_offload
+        or not cli_quantize_base
+    ):
         try:
             from .trainer import estimate_vram as _estimate_vram
+            _estimate_kwargs: dict[str, Any] = {}
+            if not cli_quantize_base:
+                # Only forwarded when set, so the default call is unchanged.
+                _estimate_kwargs["quantize_base"] = False
+            if getattr(args, "no_gradient_checkpointing", False):
+                _estimate_kwargs["gradient_checkpointing"] = False
+            if getattr(args, "target_modules", None):
+                _estimate_kwargs["target_modules"] = _parse_target_modules(args.target_modules)
             estimate = _estimate_vram(
                 model=args.model,
                 mode=mode,
                 lora_r=cli_lora_r if cli_lora_r is not None else 16,
                 batch_size=cli_batch_size if cli_batch_size is not None else 1,
                 offload=cli_offload,
+                **_estimate_kwargs,
             )
             # Coerce the dataclass-shaped estimate into a dict for JSON /
             # human-readable rendering. Defensive: accept either a dict
@@ -7180,6 +7504,8 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
         "detected_via": detected_via,
         "recommended_batch_size": selected_tier[1],
         "tier_notes": selected_tier[2],
+        # True = nf4 4-bit QLoRA base (the default); False with --no-4bit.
+        "quantize_base": cli_quantize_base,
         "tiers": [
             {"vram_min_gb": t[0], "batch_size": t[1], "note": t[2]}
             for t in _VRAM_BATCH_SIZE_TIERS
@@ -7787,6 +8113,9 @@ Tips:
         default=256,
         help="LoRA rank (default: 256 in v1.3 'quality' preset; pass --lora-preset=fast for v1.2.x rank-16 footprint). Must be > 0.",
     )
+    # ui-v2 P3: per-run knobs the web form passes (alpha, dropout, target
+    # modules, 16-bit base, tracker run name, checkpointing, temperature stop).
+    _add_p3_training_args(train_parser, multi=False)
     # BRIDGE Wave 6b (v1.3): five new LoRA / training knobs added in
     # lock-step with the backend agent's Wave 6b additions
     # (DoRA / packing-default / PiSSA-LoftQ / quality-vs-fast preset /
@@ -8182,6 +8511,32 @@ Tips:
         default="slao",
         help="Merge mode (default: slao)",
     )
+    # ui-v2 P3: the basic training knobs `train` already has. Defaults are None
+    # ("not set") so a plain multi-run keeps the MultiRunConfig / Trainer
+    # defaults byte-identically; they are forwarded only when given.
+    multi_parser.add_argument(
+        "--lr",
+        type=_positive_float,
+        default=None,
+        help=(
+            "Starting learning rate (must be > 0). Default: 2e-4. The sweep "
+            "still decays it across runs (linear, ending at a quarter of the "
+            "start, the default 2e-4 -> 5e-5 shape)."
+        ),
+    )
+    multi_parser.add_argument(
+        "--batch-size",
+        type=_auto_or_positive_int,
+        default=None,
+        help="Per-device batch size: 'auto' (default) or a positive integer",
+    )
+    multi_parser.add_argument(
+        "--lora-r",
+        type=_positive_int,
+        default=None,
+        help="LoRA rank (must be > 0). Default: the settings value (256).",
+    )
+    _add_p3_training_args(multi_parser, multi=True)
     # BRIDGE Wave 6b (v1.3): mirror of train_parser's five new LoRA /
     # training knobs so a multi-run session honors the same
     # DoRA / packing / init-strategy / preset / optimizer choices as a
@@ -9326,6 +9681,36 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
             "Estimate the FSDP2 CPU-offload full-FT path: params + optimizer "
             "spill to host RAM (reported as host_ram) so the GPU total drops "
             "to the working set + activations. mode='full' only."
+        ),
+    )
+    estimate_vram_parser.add_argument(
+        "--no-4bit",
+        action="store_true",
+        help=(
+            "Estimate with an unquantized (16-bit) base model instead of the "
+            "default 4-bit nf4 QLoRA base, matching `backprop train --no-4bit`. "
+            "Also triggers the per-config estimate. Adds quantize_base to the "
+            "--json output."
+        ),
+    )
+    estimate_vram_parser.add_argument(
+        "--target-modules",
+        default=None,
+        metavar="TEXT",
+        help=(
+            "LoRA target modules for the per-config estimate: comma-separated "
+            "names (e.g. q_proj,v_proj) or all-linear (the default), matching "
+            "`backprop train --target-modules`. Sizes the adapter."
+        ),
+    )
+    estimate_vram_parser.add_argument(
+        "--no-gradient-checkpointing",
+        action="store_true",
+        help=(
+            "Estimate LoRA activations without gradient checkpointing (every "
+            "layer's activations kept), matching `backprop train "
+            "--no-gradient-checkpointing`. Ignored with --mode=full, which "
+            "always checkpoints."
         ),
     )
     estimate_vram_parser.add_argument(

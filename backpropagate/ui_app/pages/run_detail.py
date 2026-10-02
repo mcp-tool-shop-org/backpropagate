@@ -736,8 +736,11 @@ def run_detail_page() -> rx.Component:
                     ),
                     direction="column",
                     gap="var(--space-6)",
-                    padding="var(--space-7)",
+                    padding=rx.breakpoints(
+                        initial="var(--space-4)", md="var(--space-6)", xl="var(--space-7)"
+                    ),
                     max_width="1320px",
+                    margin_x="auto",
                     width="100%",
                     on_mount=RunDetailState.load_run,
                 ),

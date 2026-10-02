@@ -419,7 +419,7 @@ class TestTrainStateSettersExhaustive:
             ("set_steps", "steps", "250", 250, 0, 1, 10**9, 100_000),
             ("set_lora_r", "lora_r", 64, 64, 0, 1, 9999, 256),
             ("set_lora_alpha", "lora_alpha", "128", 128, -5, 1, 9999, 512),
-            ("set_gpu_temp_threshold", "gpu_temp_threshold", 90, 90, 10, 40, 500, 110),
+            ("set_gpu_temp_threshold", "gpu_temp_threshold", 90, 90, 10, 50, 500, 105),
         ],
     )
     def test_int_setters(self, handler, field, good, stored, low, clamped_low, high, clamped_high):
@@ -482,15 +482,14 @@ class TestTrainStateSettersExhaustive:
         s.set_wandb_run_name("")
         assert (s.wandb_run_name, s.wandb_run_name_error) == ("", "")
 
-    def test_quantization_and_flags(self):
+    def test_mode_and_flags(self):
         s = us.TrainState()
-        s.set_quantization("8-bit")
-        assert s.quantization == "8-bit"
-        s.set_quantization("2-bit")
-        assert s.quantization == "8-bit"
+        s.set_train_mode("lora")
+        assert s.train_mode == "lora"
+        s.set_train_mode("2-bit")
+        assert s.train_mode == "lora"
         s.set_gradient_checkpointing(0)
-        s.set_flash_attention("")
-        assert s.gradient_checkpointing is False and s.flash_attention is False
+        assert s.gradient_checkpointing is False
         s.set_gradient_checkpointing(1)
         assert s.gradient_checkpointing is True
 
@@ -564,10 +563,10 @@ class TestMultiRunStateSetters:
         s.set_lora_alpha(16)
         s.set_lora_dropout("0.2")
         s.set_target_modules("q_proj")
-        s.set_quantization("16-bit")
+        s.set_train_mode("lora")
         assert (s.steps, s.batch_size, s.learning_rate, s.lora_r, s.lora_alpha,
-                s.lora_dropout, s.target_modules, s.quantization) == (
-            250, "32", 3e-4, 8, 16, 0.2, "q_proj", "16-bit")
+                s.lora_dropout, s.target_modules, s.train_mode) == (
+            250, "32", 3e-4, 8, 16, 0.2, "q_proj", "lora")
         s.set_steps(0)
         s.set_learning_rate(9)
         s.set_lora_r("x")
@@ -575,7 +574,7 @@ class TestMultiRunStateSetters:
         s.set_lora_dropout(-1)
         s.set_batch_size("lots")
         s.set_target_modules("a b; c")
-        s.set_quantization("1-bit")
+        s.set_train_mode("full")  # a multi-run merges adapters: never full
         assert s.steps == 1 and "minimum" in s.steps_error
         assert s.learning_rate == 1.0 and "maximum" in s.learning_rate_error
         assert s.lora_r == 8 and "integer" in s.lora_r_error
@@ -583,7 +582,7 @@ class TestMultiRunStateSetters:
         assert s.lora_dropout == 0.0 and "minimum" in s.lora_dropout_error
         assert s.batch_size == "32" and s.batch_size_error
         assert s.target_modules == "q_proj" and s.target_modules_error
-        assert s.quantization == "16-bit"
+        assert s.train_mode == "lora"
 
     @pytest.mark.parametrize(
         ("handler", "field", "good", "low", "clamped_low", "high", "clamped_high"),

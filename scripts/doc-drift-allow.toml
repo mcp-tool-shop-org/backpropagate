@@ -139,41 +139,22 @@ TrainState = [
     "step_history",
     # consumed by the job_run_label computed var ("run 2 of 3", ui-v2 P2)
     "job_runs",
+    # ui-v2 P3 inline VRAM estimate: read by the vram_est_label / _pct /
+    # _detail computed vars, which the page binds instead of the raw fields
+    "vram_est_total",
+    "vram_est_batch",
+    "vram_est_note",
+    # consumed by _finalize_job's stopped label (the GPU temperature stop)
+    "job_safety_reason",
 ]
 
-# MultiRunState — every config field is mirrored from TrainState by
-# design (Reflex's metaclass requires direct declaration, see ui_state.py
-# comment block before `_apply_model`). ui-v2 P2 shows only the fields the
-# multi-run CLI has flags for (model, dataset, runs, steps, samples, merge);
-# the rest (batch size, learning rate, LoRA shape, quantization) wait for the
-# P3 CLI-parity pass, which adds the flags and puts them on the form.
+# MultiRunState — fields declared for the form but read only by handlers
+# (ui-v2 P3 put every training field on the form; these remain).
 MultiRunState = [
-    "quantization",
-    "dataset_path",
-    "dataset_path_error",
-    "steps",
-    "steps_error",
-    "batch_size",
-    "batch_size_error",
-    "learning_rate",
-    "learning_rate_error",
-    "lora_r",
-    "lora_r_error",
-    "lora_alpha",
-    "lora_alpha_error",
-    "lora_dropout",
-    "lora_dropout_error",
-    "target_modules",
-    "target_modules_error",
     "replay_fraction",
     "replay_fraction_error",
     "current_run_index",
     "events",
-    # Stage C honesty floor (CLIUI-B-001): the page's live-run consumer (the
-    # training spinner reading run_state) was removed when the stub Start
-    # button became "coming soon". run_state is retained for the deferred
-    # UI-training hookup (CLIUI-B-002, V1_5_BRIEF feature pass), which re-adds
-    # the consumer and closes this loop.
     "run_state",
 ]
 

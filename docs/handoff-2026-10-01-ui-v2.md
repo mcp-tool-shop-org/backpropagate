@@ -89,17 +89,24 @@ Each phase is its own PR. **A PR is not ready until every gate item is met.**
 | P3 | Full visual pass on every page + CLI parity (presets, method, mode, VRAM estimate inline: fits / tight / won't fit) |
 
 **Gate for every phase:**
-1. **A real browser test.** Playwright with `channel="chrome"`; a scratch venv with Playwright exists at `E:/AI/bp-shots/.shotvenv`. It drives the phase's primary actions for real.
+1. **A real browser test of what the phase adds, run once before the PR.** Playwright with `channel="chrome"`; a scratch venv with Playwright exists at `E:/AI/bp-shots/.shotvenv`.
    - **P1:** start a real 20-step run from the UI, watch steps advance, press Stop, assert a loadable checkpoint and a `run_history.json` entry, reload mid-run and assert it reattaches.
-   - **This touches the GPU:** tell the lead first, and the lead confirms with the Director. The VRAM watchdog must be up (`pwsh -NoProfile -File E:\AI\training\_watchdog_start.ps1`).
+   - **P2:** export a GGUF from the UI, and run a 2-run multi-run from the UI.
+   - **P3:** each new control (preset, method, mode) starts a run with the setting it shows; the VRAM estimate matches `backprop estimate-vram`.
+   - **These touch the GPU:** tell the lead first, and the lead confirms with the Director. The VRAM watchdog must be up (`pwsh -NoProfile -File E:\AI\training\_watchdog_start.ps1`).
 2. **No "coming soon"** text anywhere in the UI.
-3. **Screenshots** of every page in the phase's scope:
-   - at 1920×1080 and 1366×768, in dark and light;
-   - in each state that applies: idle, running, stopping, stopped, failed, finished;
-   - saved to `E:/AI/bp-shots/review/<phase>/` and listed in the PR body.
+3. **Screenshots**, saved to `E:/AI/bp-shots/review/<phase>/` and listed in the PR body:
+   - one per page the phase changed, at 1920×1080, in dark and light;
+   - for the training and run pages, also running, stopped and finished.
    - **Look at them yourself before sending them.** The Director reviews them before merge.
-4. **Accessibility:** WCAG AA text contrast, and a visible focus ring on every interactive element. Tab through each page once.
+   - The 1366×768 set is taken once, from the installed Store build after P3; it doubles as the Store listing images.
+4. **Accessibility, once, in P3:** WCAG AA text contrast, and a visible focus ring on every interactive element. Tab through each page once.
 5. **CI green on GitHub,** confirmed via REST (`gh api repos/<r>/commits/<sha>/check-runs`), after `atlas check` on the final commit.
+
+**Don't over-test (Director, 2026-10-02):**
+- Don't run the full local suite (7,300+ tests) before a PR, or after every change. CI runs it on every push. Locally, run only the test files that cover what you changed.
+- Run each GPU or browser test once, when its feature is done, not after every edit.
+- The lead doesn't re-run your tests: it reads the diff, looks at the screenshots and confirms CI.
 
 ## Open fixes your work depends on
 

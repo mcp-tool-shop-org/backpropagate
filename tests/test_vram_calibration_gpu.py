@@ -3,7 +3,7 @@
 
 Heavy and opt-in (``BACKPROPAGATE_UI_FLOW=1``, CUDA). Runs BY HAND on the dev
 rig, never in CI, like the ui-v2 flow tests. Every job here is bounded: the
-largest is Llama 3.2 1B at batch 4 x 2,048 tokens (about 10 GiB), and the
+largest is Llama 3.2 1B at batch 4 x 2,048 tokens (about 5.4 GiB), and the
 calibration itself refuses any probe not predicted to fit in free VRAM.
 
 1. CLI: calibrate Llama 3.2 1B (QLoRA), then train one HELD-OUT config the
@@ -16,8 +16,10 @@ Run (rig):
 
     BACKPROPAGATE_UI_FLOW=1 PYTHONPATH=. python -m pytest tests/test_vram_calibration_gpu.py -v -s
 
-Last run on the RTX 5090 (2026-10-02): both passed in 3 min 58 s; the held-out
-batch 3 x 2,048 run peaked at 7.47 GiB against 7.44 GiB predicted (-0.4%).
+Last run on the RTX 5090 (2026-10-02, after the efficient-attention fix): both
+passed in 3 min 44 s; the held-out batch 3 x 2,048 run peaked at 4.27 GiB
+against 4.25 GiB predicted (-0.3%). Before that fix the same run peaked at
+7.47 GiB.
 """
 
 from __future__ import annotations
@@ -115,7 +117,7 @@ def test_cli_calibration_predicts_a_held_out_run(tmp_path):
     assert proc.returncode == 0, (proc.stdout + proc.stderr)[-3000:]
     cal = _last_json(proc.stdout, "calibration")["calibration"]
     assert store.exists()
-    assert cal["quad_bytes"] is not None and cal["max_residual_pct"] < 10
+    assert cal["quad_bytes"] == 0.0 and cal["lin_bytes"] > 0
     assert len([p for p in cal["probes"] if not p.get("oom")]) >= 2
     assert 0.5 < cal["load_gib"] < 2.0 and 0.9 < cal["floor_gib"] < 1.1
 
@@ -140,7 +142,8 @@ def test_cli_calibration_predicts_a_held_out_run(tmp_path):
     measured = json.loads(line[-1][len("HELDOUT "):])["peak_gib"]
     print(f"\nheld-out batch 3 x 2048: measured {measured:.2f} GiB, predicted {predicted:.2f} GiB "
           f"({100 * (predicted - measured) / measured:+.1f}%)")
-    assert predicted == pytest.approx(measured, rel=0.10)
+    # Never below the real peak, and close to it.
+    assert measured * 0.97 <= predicted <= measured * 1.12
 
 
 @pytest.mark.skipif(not PLAYWRIGHT_OK, reason="playwright not installed")

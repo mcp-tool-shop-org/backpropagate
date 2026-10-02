@@ -7454,7 +7454,7 @@ def _cmd_calibrate_body(args: argparse.Namespace) -> int:
     if cal.rows_measured:
         _print_kv("Each row of 1,024 tokens", f"{cal.rows_gib(1, 1024):.2f} GB")
         _print_kv("Each row of 2,048 tokens", f"{cal.rows_gib(1, 2048):.2f} GB")
-        _print_kv("Probe fit", f"within {cal.max_residual_pct:.0f}%")
+        _print_kv("Probes", f"highest cost per token used; they differed by {cal.max_residual_pct:.0f}%")
     else:
         _print_warning(
             "No probe large enough to measure the per-row cost fitted in the "

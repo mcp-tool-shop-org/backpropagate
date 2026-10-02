@@ -1358,7 +1358,6 @@ def estimate_vram(
     vocab_size: int | None = None,  # None: the model's config, else 152064
     gradient_checkpointing: bool = True,  # the trainer default in both modes
     target_modules: str | list[str] | None = None,  # None: all-linear (the default)
-    varlen_attention: bool | None = None,  # None: detect flash-attn / xFormers
     use_calibration: bool = True,  # prefer a measurement made on this GPU
 ) -> VRAMEstimate:
     """v1.4 BACKEND-F-002: pre-flight VRAM estimator.
@@ -1367,23 +1366,28 @@ def estimate_vram(
     ask "will this config OOM?" instead of finding out at first OOM.
 
     The cost model is fitted to measured peaks (RTX 5090, torch 2.10,
-    transformers 5.5, unsloth 2026.5; 22 probes over six models from 135M to
-    7B, batch 1-8, 1024-4096 token rows, rank 16 and 256). On those probes it
-    is within about 10% of the measured peak, and within 2% on most:
+    transformers 5.5, unsloth 2026.5; 24 LoRA probes over six models from
+    135M to 7B, batch 1-8, 1024-4096 token rows, rank 16 and 256, 2026-10-02).
+    It never read below PyTorch's measured peak on those probes: 3-19% above
+    it on Llama 3.2 1B and 3B and Qwen2.5 7B, and 50-76% above it on SmolLM2
+    135M, SmolLM3 3B and Qwen2.5 3B, where Unsloth's compiled loss needs about
+    half the logits memory. ``backprop estimate-vram --calibrate`` measures
+    the model in hand.
 
     * weights: 2 bytes/param in 16-bit; in 4-bit the embeddings stay 16-bit
       and the rest costs ~0.7 bytes/param (Unsloth's dynamic 4-bit keeps some
       layers in 16-bit);
-    * LoRA adapter: 4 bytes per trainable param, plus ~6.3 bytes per trainable
-      param while training (gradients + optimizer state);
+    * LoRA adapter: 4 bytes per trainable param, plus ~8.4 bytes per trainable
+      param while training (gradients, optimizer state, adapter activations);
     * a floor every run pays: one transient fp32 copy of the embedding table
       (``4 * vocab * hidden`` bytes);
-    * per row, with gradient checkpointing: one layer's attention scores,
-      ``16 * heads * seq^2`` bytes, when attention runs through PyTorch SDPA
-      (no flash-attention / xFormers, i.e. every Windows install), or the
-      fp32 logits ``4 * vocab * seq`` bytes if larger; plus ``35 * hidden *
-      seq`` bytes of activations. Without gradient checkpointing every
-      layer's attention is kept (``* num_layers``);
+    * per token in the batch (rows x row length): the loss's fp32 logits,
+      ``4 * vocab`` bytes, plus ``30 * hidden`` bytes of activations. Memory
+      is linear in the row length: attention runs through a memory-efficient
+      kernel (see :func:`_prefer_efficient_sdpa`) and keeps no
+      ``seq x seq`` scores. Without gradient checkpointing every layer's
+      activations are kept as well: ``layers * (20 * hidden + 6 *
+      intermediate)`` bytes per token (three models);
     * full fine-tuning: 2 bytes/param of weights plus ~5.3 bytes/param for
       gradients and the paged 8-bit optimizer, counted system-wide (PyTorch's
       counters miss the optimizer's managed memory and read ~40% lower), and
@@ -1421,12 +1425,8 @@ def estimate_vram(
         use_calibration: when True (default) and this model was measured on
             this GPU (``backprop estimate-vram <model> --calibrate``), the
             result comes from that measurement and ``source`` is
-            ``"measured"``. Not used with ``offload``, with gradient
-            checkpointing off, or when ``varlen_attention`` is forced.
-        varlen_attention: whether a variable-length attention kernel
-            (flash-attention, or xFormers on the Unsloth path) is in use, in
-            which case the quadratic attention term is dropped. None detects
-            what this machine has installed.
+            ``"measured"``. Not used with ``offload`` or with gradient
+            checkpointing off.
         overhead_fraction: Fragmentation + framework overhead (default 15%).
         param_count_billions: Optional explicit parameter count. When
             None, estimated via :func:`_estimate_param_count_billions`.
@@ -1435,7 +1435,6 @@ def estimate_vram(
         :class:`VRAMEstimate` carrying the headline number + breakdown.
     """
     notes: list[str] = []
-    _varlen_forced = varlen_attention is not None
 
     if mode == "full" and quantize_base:
         # Full fine-tuning never loads a 4-bit base (the trainer trains every
@@ -1518,7 +1517,7 @@ def estimate_vram(
             dims_per_layer = sum(per_module.get(t, 2 * hidden_dim) for t in targets)
         trainable_params = float(lora_r * dims_per_layer * num_layers)
         lora_adapter_gb = trainable_params * 4 * bytes_to_gb
-        optimizer_state_gb = trainable_params * 6.3 * bytes_to_gb
+        optimizer_state_gb = trainable_params * 8.4 * bytes_to_gb
     else:
         trainable_params = params
         lora_adapter_gb = 0.0
@@ -1529,32 +1528,22 @@ def estimate_vram(
         # against 12.6 GiB reported by torch (RTX 5090, 2026-09-30).
         optimizer_state_gb = trainable_params * 5.3 * bytes_to_gb
 
-    # 4. Per-row cost. The attention scores of the layer being differentiated
-    #    (SDPA with a dense mask) or the fp32 logits, whichever is larger,
-    #    plus per-token activations.
-    if varlen_attention is None:
-        varlen_attention = _varlen_attention_installed()
-    logits_bytes = 4.0 * vocab_size * seq
-    if mode == "full" or varlen_attention:
-        # The transformers path (full mode) and flash / xFormers kernels do
-        # not materialise the seq x seq scores.
-        attention_bytes = 0.0
-    else:
-        attention_bytes = 16.0 * num_heads * seq * seq
-        if not gradient_checkpointing:
-            attention_bytes *= num_layers
-            notes.append("gradient checkpointing off: every layer's attention is kept")
-    row_bytes = max(attention_bytes, logits_bytes) + 35.0 * hidden_dim * seq
+    # 4. Per-token cost: the loss's fp32 logits plus activations. Linear in
+    #    the row length (no seq x seq attention scores are kept). Unsloth's
+    #    compiled loss needs about half the logits memory on some models; the
+    #    full figure is used so the estimate does not read low.
+    token_bytes = 4.0 * vocab_size + 30.0 * hidden_dim
+    if not gradient_checkpointing:
+        # Every layer's activations stay alive for the backward pass
+        # (measured on Llama 3.2 1B and 3B and SmolLM2 135M).
+        token_bytes += num_layers * (20.0 * hidden_dim + 6.0 * inter_dim)
+        notes.append("gradient checkpointing off: every layer's activations are kept")
+    row_bytes = token_bytes * seq
     # A floor every run pays: one transient fp32 copy of the embedding table
     # (measured: 0.98 GiB on Llama 3.2 1B, 2.03 GiB on Qwen2.5 7B). Small
     # batches of short rows cost this much and no less.
     floor_bytes = 4.0 * vocab_size * hidden_dim
     activations_gb = max(floor_bytes, batch_size * row_bytes) * bytes_to_gb
-    if attention_bytes > logits_bytes:
-        notes.append(
-            "attention through PyTorch SDPA (no flash-attention / xFormers): "
-            "memory grows with seq^2 per row"
-        )
     if mode == "full":
         notes.append(
             "mode='full': fitted on two runs (135M, 3B); the total is system-wide "
@@ -1600,7 +1589,7 @@ def estimate_vram(
         )
 
     source = "estimate"
-    if use_calibration and not offload and gradient_checkpointing and not _varlen_forced:
+    if use_calibration and not offload and gradient_checkpointing:
         try:
             from . import vram_calibration as _cal
 
@@ -1636,7 +1625,8 @@ def estimate_vram(
                 f"measured on this GPU ({measured.machine.get('gpu', 'GPU')}, "
                 f"{measured.measured_at})"
                 + (
-                    f"; probes fitted within {measured.max_residual_pct:.0f}%"
+                    f"; highest per-token cost of the probes (they differed by "
+                    f"{measured.max_residual_pct:.0f}%)"
                     if measured.rows_measured
                     else "; load size measured, per-row cost from the formula"
                 )
@@ -1691,57 +1681,49 @@ def estimate_vram(
 # easy to mock in tests too.
 
 
-def _varlen_attention_available(model: Any, *, unsloth_loaded: bool) -> bool:
-    """True when attention can train on a FLATTENED batch in linear memory.
+def _prefer_efficient_sdpa(*, unsloth_loaded: bool) -> bool:
+    """Make Unsloth's SDPA attention use PyTorch's memory-efficient kernel.
 
-    Padding-free / packed training joins a batch into one sequence of
-    ``batch x seq`` tokens. Only variable-length attention kernels handle
-    that efficiently: flash-attention, or xFormers on the Unsloth path.
+    Without flash-attention or xFormers (every Windows install), Unsloth's
+    attention goes through ``torch.nn.functional.scaled_dot_product_attention``
+    and, for grouped-query models (Llama, Qwen, ...), passes ``enable_gqa=True``.
+    PyTorch can honour that flag only in its flash kernel, which is not in the
+    Windows wheels, or in its "math" kernel, which materialises the full
+    ``heads x seq x seq`` score matrix in fp32, four times over.
+
+    Measured on an RTX 5090 (torch 2.10 cu128), one row of 2,048 tokens at 32
+    heads: 2.02 GiB with ``enable_gqa``, 0.03 GiB with the key/value heads
+    expanded to the query head count (the memory-efficient kernel then runs,
+    with or without a mask). In real training, Llama 3.2 1B QLoRA at batch 4 x
+    2,048 with Unsloth's packed, flattened batch: out of memory past 25.7 GiB
+    before, 5.35 GiB after, same loss, and 9.86 GiB at batch 8 (linear).
+
+    Unsloth already has the expansion path, for PyTorch builds whose SDPA has
+    no ``enable_gqa``; its modules read a ``SDPA_HAS_GQA`` flag at call time.
+    Setting that flag False selects the path. Samples stay whole and isolated
+    (Unsloth's block mask), unlike a switch to wrapped packing.
+
+    No-op when Unsloth did not load the model, when Unsloth has flash-attention
+    or xFormers (those kernels handle the packed batch themselves), or when a
+    future Unsloth no longer has the flag. Returns True when a flag was changed.
     """
-    attn = str(getattr(getattr(model, "config", None), "_attn_implementation", "") or "")
-    if attn.startswith("flash_attention"):
-        return True
-    if unsloth_loaded:
-        import sys as _sys
-
-        dispatch = _sys.modules.get("unsloth.utils.attention_dispatch")
-        if dispatch is not None and (
-            getattr(dispatch, "HAS_FLASH_ATTENTION", False)
-            or getattr(dispatch, "HAS_XFORMERS", False)
-        ):
-            return True
-    return False
-
-
-def _keep_batches_rectangular(sft_config: Any, model: Any, *, unsloth_loaded: bool) -> bool:
-    """Keep ``(batch, seq)`` batches when no variable-length attention exists.
-
-    Without flash-attention or xFormers (every Windows install: flash-attn
-    has no Windows build and xFormers is disabled on RTX 40/50), a flattened
-    batch is attended through PyTorch SDPA with a dense
-    ``heads x (batch*seq)^2`` mask. Memory then grows with the SQUARE of the
-    batch size: measured on an RTX 5090, a 1B QLoRA at batch 4 x 2048 tokens
-    tried to allocate past 25.7 GiB, hit OOM and fell back to batch 2, where
-    rectangular batches need 9.6 GiB at batch 4 (and 18 GiB at batch 8). On
-    the plain transformers path the flattened batch has no boundary mask at
-    all, which TRL itself warns is unsupported.
-
-    So in that case: padding-free off, and packing (when on) uses TRL's
-    ``wrapped`` strategy, whose rows are ordinary fixed-length sequences.
-    ``--no-packing`` still gives one sample per row. Returns True when the
-    config was changed.
-    """
-    if _varlen_attention_available(model, unsloth_loaded=unsloth_loaded):
+    if not unsloth_loaded:
         return False
-    if hasattr(sft_config, "padding_free"):
-        sft_config.padding_free = False
-    if getattr(sft_config, "packing", False):
-        if hasattr(sft_config, "packing_strategy"):
-            sft_config.packing_strategy = "wrapped"
-        # Unsloth's SFTTrainer wrapper otherwise re-enables its own packing
-        # (which flattens); this is the opt-out attribute it reads.
-        sft_config._unsloth_disable_auto_packing = True
-    return True
+    import sys as _sys
+
+    dispatch = _sys.modules.get("unsloth.utils.attention_dispatch")
+    if dispatch is None or not hasattr(dispatch, "SDPA_HAS_GQA"):
+        return False
+    if getattr(dispatch, "HAS_FLASH_ATTENTION", False) or getattr(dispatch, "HAS_XFORMERS", False):
+        return False
+    changed = False
+    for name, module in list(_sys.modules.items()):
+        if module is None or not (name == "unsloth" or name.startswith("unsloth.")):
+            continue
+        if getattr(module, "SDPA_HAS_GQA", None) is True:
+            module.SDPA_HAS_GQA = False  # type: ignore[attr-defined]
+            changed = True
+    return changed
 
 
 def _build_sft_config(
@@ -5666,15 +5648,11 @@ class Trainer:
         if self._fp8_effective:
             _set = self._set_fp8_shape_constraints_on_sft_config
             _set(sft_config)
-        if _keep_batches_rectangular(
-            sft_config, self._model, unsloth_loaded=bool(self.use_unsloth)
-        ) and not getattr(self, "_rectangular_logged", False):
-            self._rectangular_logged = True
+        if _prefer_efficient_sdpa(unsloth_loaded=bool(self.use_unsloth)):
             logger.info(
-                "No flash-attention or xFormers attention available: keeping "
-                "batches rectangular%s so attention memory grows linearly with "
-                "the batch size.",
-                " (wrapped packing)" if getattr(sft_config, "packing", False) else "",
+                "No flash-attention or xFormers: attention uses PyTorch's "
+                "memory-efficient kernel (key/value heads expanded), so memory "
+                "grows linearly with the batch size and row length."
             )
         return sft_config
 

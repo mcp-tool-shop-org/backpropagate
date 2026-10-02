@@ -4,7 +4,7 @@
 the web UI) run a few very short REAL training probes of one model and fit
 that model's memory cost on this machine:
 
-    peak(batch, seq) = load + max(floor, batch * (quad * seq^2 + lin * seq))
+    peak(batch, seq) = load + max(floor, batch * seq * bytes_per_token)
 
 ``floor`` is a fixed cost every run pays (a temporary full-precision copy of
 the embedding table: 0.98 GiB for Llama 3.2 1B, 2.03 GiB for Qwen2.5 7B), so
@@ -57,7 +57,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-CALIBRATION_VERSION = 1
+#: 2: the per-row cost is the highest per-token cost over the probes (1 was a
+#: two-term least-squares fit made before the efficient-attention fix).
+CALIBRATION_VERSION = 2
 GIB = 1024**3
 
 #: Candidate (batch, seq) probes, most informative first. Up to
@@ -82,7 +84,7 @@ MEASURED_OVERHEAD = 0.06
 #: Bytes per trainable adapter parameter: fp32 weights, then gradients +
 #: optimizer state while training (measured, see estimate_vram).
 ADAPTER_BYTES_LOADED = 4.0
-ADAPTER_BYTES_TRAINING = 6.3
+ADAPTER_BYTES_TRAINING = 8.4
 
 
 class CalibrationError(RuntimeError):
@@ -100,8 +102,9 @@ class Calibration:
     machine: dict[str, Any]
     load_gib: float  # weights (+ the tiny probe adapter) after loading
     floor_gib: float  # fixed transient every run pays (fp32 embedding copy)
-    # Per row: bytes per token^2 and per token. None when no probe above the
-    # floor fitted this card; the estimate then uses the formula's row cost.
+    # Per row: bytes per token (``quad_bytes``, per token^2, is always 0.0 and
+    # kept for the stored format). None when no probe above the floor fitted
+    # this card; the estimate then uses the formula's row cost.
     quad_bytes: float | None
     lin_bytes: float | None
     probe_trainable_params: int
@@ -161,7 +164,9 @@ def machine_fingerprint() -> dict[str, Any] | None:
         "torch": torch_version,
         "transformers": _lib_version("transformers"),
         "unsloth": _lib_version("unsloth"),
-        "varlen_attention": bool(_varlen_attention_installed()),
+        # Which attention kernel family trains here. Measurements taken with
+        # one do not describe the other.
+        "attention": "varlen" if _varlen_attention_installed() else "sdpa-efficient",
     }
 
 
@@ -220,37 +225,37 @@ def save(cal: Calibration) -> Path:
 
 
 def fit_rows(
-    probes: list[dict[str, Any]], formula_quad: float, formula_lin: float
+    probes: list[dict[str, Any]], formula_quad: float = 0.0, formula_lin: float = 0.0  # noqa: ARG001
 ) -> tuple[float, float, float] | None:
-    """Per-row ``(quad_bytes, lin_bytes, max_residual_pct)`` from the probes.
+    """Per-row ``(quad_bytes, lin_bytes, spread_pct)`` from the probes.
 
     ``probes`` rows carry ``batch``, ``seq`` and ``overhead_gib`` (peak minus
-    the loaded baseline), all above the floor. With two or more sequence
-    lengths the two terms are fitted (non-negative least squares); otherwise
-    the formula's own split between them is scaled to match the measurement.
-    None when nothing usable was measured.
-    """
-    import numpy as np
+    the loaded baseline), all above the floor. Memory is linear in the tokens
+    of a batch, so each probe gives one cost per token; the HIGHEST is kept
+    (``quad_bytes`` is always 0.0 and stays only for the stored format).
 
-    rows = [p for p in probes if not p.get("oom") and p.get("overhead_gib")]
-    if not rows:
+    Why the highest and not a least-squares fit: Unsloth compiles its loss,
+    and the compiled version needs about half the logits memory. The first
+    training call in a process can run before that takes effect, which is
+    what a real run's first steps do too, so later probes in the same process
+    read lower than a fresh run peaks (Llama 3.2 1B: 555 KB per token on the
+    first probe, about 300 KB on the next two). An estimate must cover the
+    fresh run. ``spread_pct`` is how far the lowest probe sits below the
+    highest. None when nothing usable was measured.
+
+    ``formula_quad`` / ``formula_lin`` are accepted for older callers and
+    ignored.
+    """
+    per_token = [
+        float(p["overhead_gib"]) * GIB / (float(p["batch"]) * float(p["seq"]))
+        for p in probes
+        if not p.get("oom") and p.get("overhead_gib") and p.get("batch") and p.get("seq")
+    ]
+    per_token = [value for value in per_token if value > 0]
+    if not per_token:
         return None
-    y = np.array([float(p["overhead_gib"]) * GIB for p in rows])
-    quad_col = np.array([p["batch"] * float(p["seq"]) ** 2 for p in rows])
-    lin_col = np.array([p["batch"] * float(p["seq"]) for p in rows])
-    quad = lin = -1.0
-    if len({p["seq"] for p in rows}) >= 2:
-        sol, *_ = np.linalg.lstsq(np.stack([quad_col, lin_col], axis=1), y, rcond=None)
-        quad, lin = float(sol[0]), float(sol[1])
-    if quad < 0 or lin < 0:
-        base = formula_quad * quad_col + formula_lin * lin_col
-        scale = float(y.sum() / base.sum()) if base.sum() > 0 else 0.0
-        if scale <= 0:
-            return None
-        quad, lin = formula_quad * scale, formula_lin * scale
-    pred = quad * quad_col + lin * lin_col
-    resid = float(np.max(np.abs(pred - y) / np.maximum(y, 1.0))) * 100.0
-    return quad, lin, resid
+    highest, lowest = max(per_token), min(per_token)
+    return 0.0, highest, (highest - lowest) / highest * 100.0
 
 
 # ---- running it (parent side) ----------------------------------------------------------
@@ -385,7 +390,7 @@ def _child(payload: dict[str, Any]) -> int:  # pragma: no cover - GPU only (test
 
     import torch
 
-    from .trainer import Trainer, _varlen_attention_available, estimate_vram
+    from .trainer import Trainer, estimate_vram
 
     model, mode, base_4bit = payload["model"], payload["mode"], bool(payload["base_4bit"])
     free_b, total_b = torch.cuda.mem_get_info()
@@ -436,13 +441,12 @@ def _child(payload: dict[str, Any]) -> int:  # pragma: no cover - GPU only (test
     trainable = sum(p.numel() for p in net.parameters() if p.requires_grad)
     cfg = net.config
     hidden = int(cfg.hidden_size)
-    heads = int(getattr(cfg, "num_attention_heads", 0) or 32)
     # The floor: training makes one transient fp32 copy of the embedding table.
     floor_gib = int(net.get_input_embeddings().weight.numel()) * 4 / GIB
     # The formula's per-row coefficients for THIS model (see estimate_vram).
-    varlen = _varlen_attention_available(net, unsloth_loaded=bool(trainer.use_unsloth))
-    formula_quad = 0.0 if (varlen or mode == "full") else 16.0 * heads
-    formula_lin = 35.0 * hidden + (4.0 * int(cfg.vocab_size) if formula_quad == 0.0 else 0.0)
+    # Linear in the row length: the fp32 logits plus per-token activations.
+    formula_quad = 0.0
+    formula_lin = 4.0 * int(cfg.vocab_size) + 30.0 * hidden
     _emit({"event": "loaded", "load_gib": round(load_gib, 2), "floor_gib": round(floor_gib, 2)})
 
     def predicted_rows(batch: int, seq: int) -> float:

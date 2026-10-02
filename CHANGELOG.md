@@ -48,9 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or two) and stores what they cost on this card, driver and library stack.
   Estimates for that model then come from the measurement and say so
   ("measured on this GPU"; `source: measured` in `--json`). On an RTX 5090,
-  after calibrating Llama 3.2 1B and Qwen2.5 7B, the predictions were within
-  0.4% of seven real runs the probes never ran (batch 8, 4,096-token rows,
-  rank 256). It is built not to hurt the machine: the process caps its own
+  after calibrating Llama 3.2 1B and Qwen2.5 7B, the measured cost predicted
+  eleven real runs the probes never ran (batch 1 to 8, up to 4,096-token
+  rows, rank 256): ten within 0.6% of the real peak and one 3% under it,
+  before the 6% margin a measured estimate adds. The cost kept is the
+  highest any probe showed, which is what a fresh run peaks like. It is
+  built not to hurt the machine: the process caps its own
   GPU memory below what is free, so an overrun fails cleanly instead of
   spilling into system RAM, and each probe runs only if it is predicted to
   fit. When no informative probe fits (a big model on a small card), the
@@ -80,27 +83,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`backprop estimate-vram` (and the UI's estimate) now track measured
   memory.** The old formula was 3 to 10 times low: it estimated 2.5 GB for a
-  run that peaked at 6.5 GiB, and 1.9 GB for one that peaked at 17.8 GiB. The
-  new one is fitted to 22 real training runs on an RTX 5090 (six models from
-  135M to 7B, batch 1 to 8, 1,024 to 4,096-token rows, rank 16 and 256) and
-  is within about 10% of the measured peak on them, within 2% on most. It
-  accounts for the attention memory that grows with the square of the
-  sequence length when flash-attention and xFormers are absent (every
-  Windows install), the 16-bit embeddings of a 4-bit base, the adapter's
-  size for the chosen target modules, and a 16-bit base for full
-  fine-tuning. Full fine-tuning is priced system-wide, about 5.3 bytes per
-  parameter on top of the weights: PyTorch's own counters miss the paged
-  8-bit optimizer's memory and read about 40% lower (SmolLM3 3B, batch 4 x
-  512: 22.0 GiB on the device, 12.6 GiB reported). On three large-model runs
-  measured before the formula was written (14B, 24B, 32B QLoRA) it lands at
-  -6%, +5% and 0%. The model's own shape comes from its `config.json` when it
+  run that peaked at 6.5 GiB. The new one is fitted to 24 real QLoRA and
+  LoRA runs on an RTX 5090 (six models from 135M to 7B, batch 1 to 8, 1,024
+  to 4,096-token rows, rank 16 and 256, with and without gradient
+  checkpointing). It never read below a measured peak on them: 3 to 19%
+  above on Llama 3.2 1B and 3B and Qwen2.5 7B, and 50 to 76% above on
+  Qwen2.5 3B, SmolLM3 3B and SmolLM2 135M, where Unsloth's compiled loss
+  needs about half the logits memory (`--calibrate` measures the model in
+  hand). Memory is priced per token in the batch (the loss's full-precision
+  logits plus activations), so it grows in a straight line with batch size
+  and row length. It also counts the 16-bit embeddings of a 4-bit base, the
+  adapter's size for the chosen target modules (about 8.4 bytes per
+  trainable parameter while training), every layer's activations when
+  gradient checkpointing is off, and a floor every run pays: a temporary
+  full-precision copy of the embedding table (0.98 GiB on Llama 3.2 1B,
+  2.03 GiB on Qwen2.5 7B). Full fine-tuning is priced system-wide on a
+  16-bit base, about 5.3 bytes per parameter on top of the weights:
+  PyTorch's own counters miss the paged 8-bit optimizer's memory and read
+  about 40% lower (SmolLM3 3B, batch 4 x 512: 22.0 GiB on the device, 12.6
+  GiB reported). The model's own shape comes from its `config.json` when it
   is in the Hugging Face cache or a local folder (never downloaded), and ids
   that name their size in millions (`SmolLM2-135M`) are no longer priced as
-  7B. It also counts a floor every run pays: a temporary full-precision copy
-  of the embedding table (0.98 GiB on Llama 3.2 1B, 2.03 GiB on Qwen2.5 7B).
-  It is still an estimate: another GPU, driver or attention backend shifts
-  it (use `--calibrate` to measure). `estimate-vram` gains
-  `--target-modules`.
+  7B. It is still an estimate: another GPU, driver or attention backend
+  shifts it. `estimate-vram` gains `--target-modules`.
 - **The web UI's training forms open on the CLI's defaults** (the Quality
   LoRA shape: rank 256, alpha 512, every linear layer; 4-bit base; SFT). They
   used to show rank 16 on four attention layers, which the job never used.
@@ -112,18 +117,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Training without flash-attention or xFormers no longer needs memory
-  that grows with the square of the batch size.** That is every Windows
-  install (flash-attn has no Windows build, and xFormers is disabled on RTX
-  40/50 cards). Batches were joined into one long sequence and attended
-  with a dense mask, so a 1B QLoRA at batch 4 with 2,048-token rows tried
-  to allocate past 25.7 GiB on a 32 GB card, ran out of memory and fell
-  back to batch 2. Such runs now keep ordinary batches: the same run peaks
-  at 9.6 GiB at batch 4 and 18.1 GiB at batch 8, with the same loss. Packing
-  uses TRL's `wrapped` strategy in that case (same tokens per step; samples
-  that share a row can see each other, and a sample can be split across two
-  rows); `--no-packing` keeps one sample per row. Setups with
-  flash-attention or xFormers are unchanged.
+- **Training without flash-attention or xFormers uses far less memory.**
+  That is every Windows install (flash-attn has no Windows build, and
+  xFormers is disabled on RTX 40/50 cards). Attention there runs through
+  PyTorch's built-in kernel, and for grouped-query models (Llama, Qwen and
+  most others) Unsloth asked that kernel to handle the grouping itself.
+  PyTorch's Windows builds can only do that by building the full
+  `heads x tokens x tokens` score matrix in full precision: 2 GiB for one
+  2,048-token row at 32 heads, and with packed batches it grew with the
+  square of the batch size. A 1B QLoRA at batch 4 with 2,048-token rows
+  tried to allocate past 25.7 GiB on a 32 GB card, ran out of memory and
+  fell back to batch 2. The trainer now has Unsloth expand the key and
+  value heads first, so PyTorch's memory-efficient kernel runs: the same
+  run peaks at 5.35 GiB at batch 4 and 9.86 GiB at batch 8, with the same
+  loss. Memory grows in a straight line with batch size and row length.
+  Packing is unchanged: samples stay whole and cannot see each other.
+  Setups with flash-attention or xFormers are unchanged.
 - **Training no longer deletes its own output folder** (#278, data loss).
   `backprop train --output X` saves the model into X, and the save replaced
   the whole folder, so every run deleted X's `run_history.json` (the Runs

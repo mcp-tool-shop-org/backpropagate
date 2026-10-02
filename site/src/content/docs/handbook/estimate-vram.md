@@ -15,22 +15,25 @@ Since 1.8.2 you can also **measure** instead of estimate: `backprop estimate-vra
 
 ## How accurate it is
 
-The formula is fitted to peak memory measured on real training runs (RTX 5090, torch 2.10, transformers 5.5, Unsloth 2026.5, Windows). Estimate against measurement, before the 8% allocator margin the estimate adds on top:
+The formula is fitted to peak memory measured on real training runs (RTX 5090, torch 2.10, transformers 5.5, Unsloth 2026.5, Windows, 24 QLoRA and LoRA runs on 2026-10-02). The estimate includes its 8% allocator margin:
 
-| Run (QLoRA unless noted) | Measured peak | Formula |
+| Run (QLoRA, 2,048-token rows) | Measured peak | Estimate |
 |---|---|---|
-| Llama 3.2 1B, rank 16, batch 4 x 2,048 tokens | 9.59 GiB | 9.69 (+1%) |
-| Llama 3.2 1B, rank 16, batch 8 x 2,048 | 18.09 GiB | 18.23 (+1%) |
-| Llama 3.2 1B, rank 256 all-linear, batch 4 x 2,048 | 11.32 GiB | 11.40 (+1%) |
-| Llama 3.2 3B, rank 16, batch 4 x 2,048 | 9.07 GiB | 9.44 (+4%) |
-| Qwen2.5 7B, rank 16, batch 2 x 2,048 | 10.69 GiB | 10.31 (-4%) |
-| Qwen2.5 7B, rank 256 all-linear, batch 2 x 2,048 | 16.78 GiB | 16.46 (-2%) |
-| Qwen2.5 14B, rank 32, batch 1 x 4,096 | 25.0 GiB | 23.5 (-6%) |
-| Mistral-Small 24B, rank 32, batch 1 x 4,096 | 26.5 GiB | 27.8 (+5%) |
-| Qwen2.5 32B, rank 32, batch 1 x 2,048 | 28.8 GiB | 28.7 (0%) |
-| SmolLM3 3B, full fine-tune, batch 4 x 512 | 22.0 GiB (system-wide) | 22.0 |
+| Llama 3.2 1B, rank 16, batch 4 | 5.35 GiB | 5.97 (+12%) |
+| Llama 3.2 1B, rank 16, batch 8 | 9.86 GiB | 10.70 (+9%) |
+| Llama 3.2 1B, rank 256 all-linear, batch 4 | 7.35 GiB | 8.20 (+12%) |
+| Llama 3.2 3B, rank 16, batch 4 | 6.69 GiB | 7.82 (+17%) |
+| Qwen2.5 7B, rank 16, batch 2 | 9.31 GiB | 9.80 (+5%) |
+| Qwen2.5 7B, rank 16, batch 4 | 11.91 GiB | 12.75 (+7%) |
+| Qwen2.5 7B, rank 256 all-linear, batch 2 | 16.61 GiB | 17.79 (+7%) |
+| Qwen2.5 3B, rank 16, batch 2 | 3.60 GiB | 5.38 (+49%) |
+| SmolLM3 3B, rank 16, batch 2 | 3.02 GiB | 4.92 (+63%) |
+| SmolLM2 135M, rank 16, batch 8 | 2.28 GiB | 3.67 (+61%) |
+| SmolLM3 3B, full fine-tune, batch 4 x 512 tokens | 22.0 GiB (system-wide) | 23.8 (+8%) |
 
-The three large QLoRA rows (14B, 24B, 32B) were measured before the formula was written and were not used to fit it. The full fine-tune row sets the full fine-tune constant, so it matches by construction. Before 1.8.2 the estimator was 3 to 10 times low on small configs and 25-45% low on the large ones.
+The estimate never read below a measured peak on the 24 runs. It reads 3 to 19% above on Llama 3.2 1B and 3B and Qwen2.5 7B, and 50 to 76% above on Qwen2.5 3B, SmolLM3 3B and SmolLM2 135M. On those three, Unsloth's compiled loss needs about half the memory for the output logits, and the formula prices the full figure so that it does not read low. [Measuring](#measure-on-your-own-gpu) gives the real number for the model in hand. The full fine-tune row sets the full fine-tune constant, so it matches by construction.
+
+"Measured peak" is PyTorch's peak allocation. On a card with room to spare PyTorch also keeps freed blocks cached, so Task Manager or `nvidia-smi` can show 15 to 30% more than that while a run is going (12.6 GiB for the 9.86 GiB run above). That cache is given back when memory gets short.
 
 **It is still an estimate.** A different GPU, driver, PyTorch build or attention kernel shifts the numbers. Measure when it matters.
 
@@ -40,18 +43,24 @@ The three large QLoRA rows (14B, 24B, 32B) were measured before the formula was 
 |---|---|
 | Weights, 16-bit | 2 bytes per parameter |
 | Weights, 4-bit | the embedding table stays 16-bit; the rest costs about 0.7 bytes per parameter (Unsloth's dynamic 4-bit builds keep some layers in 16-bit) |
-| LoRA adapter | 4 bytes per trainable parameter, plus about 6.3 while training (gradients and optimizer state). The count follows your rank and target modules. |
+| LoRA adapter | 4 bytes per trainable parameter, plus about 8.4 while training (gradients, optimizer state, adapter activations). The count follows your rank and target modules. |
 | Full fine-tune | 2 bytes per parameter of weights, plus about 5.3 for gradients and the paged 8-bit optimizer |
 | A floor every run pays | one temporary full-precision copy of the embedding table: 0.98 GiB on Llama 3.2 1B, 2.03 GiB on Qwen2.5 7B |
-| Each row in the batch | attention scores, `16 x heads x tokens^2` bytes, plus activations. This is the term that grows fastest: doubling the row length quadruples it. |
+| Each token in the batch (rows x row length) | the loss's full-precision logits, `4 x vocabulary` bytes, plus `30 x hidden size` bytes of activations: about 0.56 MB per token on Llama 3.2 1B, 0.70 MB on Qwen2.5 7B |
+| Gradient checkpointing off | every layer's activations are kept too: `layers x (20 x hidden size + 6 x MLP size)` bytes per token. On Llama 3.2 1B that is 3.5 times the per-token cost. |
 | Margin | 8% for allocator slack |
 
-Two things follow from the row term:
+Three things follow:
 
-- **On small models, batch size and row length cost far more than the model itself.** Llama 3.2 1B loads in about 1 GiB and needs 18 GiB at batch 8 with 2,048-token rows.
-- **The `tokens^2` term applies when attention runs through PyTorch's built-in kernel**, which is every Windows install (flash-attention has no Windows build, and xFormers is disabled on RTX 40/50). With flash-attention or xFormers the estimate drops that term.
+- **Memory grows in a straight line with batch size and with row length.** Twice the rows, or rows twice as long, cost twice the per-token part. There is no term that grows with the square of the row length.
+- **On small models, the batch costs more than the model.** Llama 3.2 1B loads in about 1 GiB and needs about 10 GiB at batch 8 with 2,048-token rows.
+- **A large adapter is a real cost on a 7B model.** Rank 256 on every linear layer of Qwen2.5 7B is 646 million trainable parameters: 2.4 GiB to hold and about 5 GiB more to train.
 
 For full fine-tuning the total is system-wide. PyTorch's own counters (`torch.cuda.max_memory_allocated`) read about 40% lower, because the 8-bit optimizer keeps its state in memory they do not count.
+
+### Why there is no `tokens^2` term
+
+Without flash-attention or xFormers (every Windows install: flash-attention has no Windows build, and xFormers is disabled on RTX 40/50), attention runs through PyTorch's built-in kernel. Unsloth asked that kernel to handle grouped-query attention itself, and PyTorch's Windows builds can only do that by building the full `heads x tokens x tokens` score matrix in full precision: 2 GiB for a single 2,048-token row at 32 heads. Since 1.8.2 the trainer has Unsloth expand the key and value heads first, which lets PyTorch use its memory-efficient kernel: 0.03 GiB for the same row, same loss. Packed samples stay whole and cannot see each other.
 
 ## Measure on your own GPU
 
@@ -61,7 +70,9 @@ backprop estimate-vram Qwen/Qwen2.5-7B-Instruct --calibrate
 
 This loads the model and runs up to three very short real training probes (a minute or two for a small model, longer for 7B), then stores what that model costs on your card, driver and library versions. Later estimates for that model on that GPU come from the measurement: the CLI shows `Source: measured on this GPU`, `--json` carries `"source": "measured"`, and the UI bar reads "VRAM · measured on this GPU".
 
-On the RTX 5090, after calibrating Llama 3.2 1B and Qwen2.5 7B, predictions were within 0.4% of eight real runs the probes never ran (batch 8, 4,096-token rows, rank 256).
+On the RTX 5090, after calibrating Llama 3.2 1B and Qwen2.5 7B, the measured cost predicted eleven real runs the probes never ran (batch 1 to 8, 1,024 to 4,096-token rows, rank 256): ten within 0.6% of the real peak and one, batch 8, 3% under it, before the 6% margin a measured estimate adds.
+
+The per-token cost that is stored is the **highest** any probe showed. Unsloth compiles its loss, and the compiled version needs less memory, but the first steps of a run can happen before it takes effect. The first probe behaves like those first steps, so it is the one a fresh run peaks like. The command prints how far the probes differed.
 
 **It is built not to hurt the machine:**
 
@@ -114,7 +125,7 @@ estimate = trainer.estimate_vram(
 )
 print(estimate.summary())
 # VRAM estimate (lora, 7.6B params, batch=2, seq=2048): total=17.8GB
-# (weights=6.3 + lora=2.4 + optim=3.8 + activations=4.0 + kv=0.0 + overhead=1.3)
+# (weights=6.3 + lora=2.4 + optim=5.1 + activations=2.7 + kv=0.0 + overhead=1.3)
 
 print(f"Fits on a 16 GB card: {estimate.fits_on_card(16.0)}")
 # Fits on a 16 GB card: False
@@ -143,38 +154,41 @@ estimate.summary()              # one-line summary
 
 ## Sample estimates
 
-All with full 2,048-token rows and PyTorch's built-in attention (Windows). Shorter data uses less.
+All with full 2,048-token rows. Shorter data uses less.
 
 | Model | Config | Estimated total | 16 GB card | 24 GB card |
 |-------|--------|-----------------|------------|------------|
-| Llama 3.2 1B | QLoRA rank 64, batch 4 | 10.9 GB | fits | fits |
-| Llama 3.2 3B | QLoRA rank 128, batch 2 | 8.5 GB | fits | fits |
-| Qwen2.5 7B | QLoRA rank 16 on q and v, batch 2 | 11.1 GB | fits | fits |
-| Qwen2.5 7B | QLoRA rank 256 all-linear, batch 1 | 15.7 GB | tight | fits |
-| Qwen2.5 7B | QLoRA rank 256 all-linear, batch 2 | 17.8 GB | does not fit | fits |
-| Qwen2.5 7B | QLoRA rank 64 all-linear, batch 4 | 17.1 GB | does not fit | fits |
-| SmolLM3 3B | full fine-tune, batch 2 | 25.0 GB | does not fit | does not fit |
+| Llama 3.2 1B | QLoRA rank 64, batch 4 | 6.5 GB | fits | fits |
+| Llama 3.2 3B | QLoRA rank 128, batch 2 | 7.7 GB | fits | fits |
+| Qwen2.5 7B | QLoRA rank 16 on q and v, batch 2 | 9.8 GB | fits | fits |
+| Qwen2.5 7B | QLoRA rank 64 all-linear, batch 2 | 11.7 GB | fits | fits |
+| Qwen2.5 7B | QLoRA rank 64 all-linear, batch 4 | 14.7 GB | tight | fits |
+| Qwen2.5 7B | QLoRA rank 256 all-linear, batch 1 | 17.0 GB | does not fit | fits |
+| Qwen2.5 7B | QLoRA rank 256 all-linear, batch 4 | 20.7 GB | does not fit | tight |
+| SmolLM3 3B | full fine-tune, batch 2 | 24.9 GB | does not fit | does not fit |
 | Phi-4-mini 3.8B | full fine-tune, batch 1 | 30.6 GB | does not fit | does not fit |
 
-**On a 16 GB card with the default settings** (Qwen2.5 7B, rank 256 on every linear layer), the automatic batch size is 2, which needs about 17.8 GB at full-length rows. The trainer's out-of-memory recovery then halves the batch to 1 and continues. To avoid that wasted attempt, pass `--batch-size 1`, or use `--lora-preset fast` (rank 16), or shorten `--max-seq-length`.
+**On a 16 GB card, the default LoRA shape does not fit a 7B model.** The default is rank 256 on every linear layer; on Qwen2.5 7B that needs about 17 GB even at batch 1, and the out-of-memory recovery (which halves the batch) cannot fix it. Use a smaller adapter: `--lora-r 64` (about 11 GB at batch 1, 11.7 GB at batch 2) or `--lora-preset fast` (rank 16).
 
 On a **32 GB** card (RTX 5090), **measured** peaks, batch 1 at each preset's full context window:
 
 | Model | Config | GPU (allocated / reserved) | Host RAM |
 |-------|--------|-----------|--------------------|
-| Qwen2.5 14B | QLoRA rank 32, 4,096 tokens | 25.0 / 28.1 GiB | — |
-| Mistral-Small 24B | QLoRA rank 32, 4,096 tokens | 26.5 / 29.6 GiB | — |
 | Qwen2.5 32B | QLoRA rank 32, 2,048 tokens | 28.8 / 30.7 GiB (just fits) | — |
 | Qwen2.5 7B | `mode="full"` on the GPU (7.6B > 6B ceiling) | refused → use `--full-ft-offload` | — |
 | Qwen2.5 7B | `mode="full" --full-ft-offload`, 512 tokens | 5.3 / 14.7 GiB | 30.8 GiB training, 32.2 GiB with save |
 
+Qwen2.5 14B and Mistral-Small 24B (rank 32, batch 1 x 4,096 tokens) peaked at 25.0 and 26.5 GiB before the attention change described above. Most of that was the score matrix, so they now need less: the estimate is 17.3 GB and 23.9 GB. They have not been re-measured.
+
 For the offload path, `estimate_vram(offload=True)` uses the same measured constants as the trainer's fit check and reports `host_ram_gb` (about 39 GB for 7.6B, which includes the save). See [full fine-tuning](/backpropagate/handbook/full-fine-tuning/#the-fit-check).
 
-The automatic batch size is 6 at 32 GB and 8 at 48 GB. It comes from a table by card size and does not look at the model, so it is too high for 14B and larger models at long rows: set `--batch-size` yourself for those, guided by the estimate.
+The automatic batch size is 6 at 32 GB and 8 at 48 GB. It comes from a table by card size and does not look at the model, so it can be too high for 14B and larger models: set `--batch-size` yourself for those, guided by the estimate.
 
 ## Limitations
 
 - **Fitted on one stack.** One GPU family, one PyTorch and transformers version, Windows. Other architectures (non-standard attention, very large vocabularies) and other kernels can differ. `--calibrate` removes this uncertainty for a given model and machine.
+- **It reads high on some models** (about 50 to 75% on three of the six measured), because the loss's memory depends on whether Unsloth's compiled version is in effect. It is built not to read low.
+- **Gradient checkpointing off** is fitted on three models and is never taken from a measurement.
 - **Full fine-tuning is fitted on two runs.** Treat it as a guide and measure.
 - **The preference methods** (ORPO, SimPO, KTO) process two sequences per example; the estimate does not model that yet.
 - **Saving and merging** at the end of a run, and evaluation passes, are not modelled.

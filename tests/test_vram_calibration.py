@@ -20,7 +20,7 @@ from backpropagate.trainer import estimate_vram
 
 GIB = vc.GIB
 MACHINE = {"gpu": "Test GPU", "vram_gib": 24.0, "torch": "2.10", "transformers": "5.5",
-           "unsloth": "2026.5", "varlen_attention": False}
+           "unsloth": "2026.5", "attention": "sdpa-efficient"}
 
 
 def _cal(**kw) -> vc.Calibration:
@@ -42,20 +42,34 @@ def _probe(batch, seq, quad, lin):
             "overhead_gib": batch * (quad * seq * seq + lin * seq) / GIB}
 
 
-def test_fit_recovers_both_terms_from_two_sequence_lengths():
-    probes = [_probe(2, 2048, 512.0, 70_000.0), _probe(4, 2048, 512.0, 70_000.0),
-              _probe(8, 1024, 512.0, 70_000.0)]
-    quad, lin, resid = vc.fit_rows(probes, formula_quad=400.0, formula_lin=50_000.0)
-    assert quad == pytest.approx(512.0, rel=1e-3)
-    assert lin == pytest.approx(70_000.0, rel=1e-3)
-    assert resid < 0.5
+def test_fit_is_linear_in_tokens_when_the_probes_agree():
+    probes = [_probe(2, 2048, 0.0, 570_000.0), _probe(4, 2048, 0.0, 570_000.0),
+              _probe(4, 1024, 0.0, 570_000.0)]
+    quad, lin, spread = vc.fit_rows(probes)
+    assert quad == 0.0
+    assert lin == pytest.approx(570_000.0)
+    assert spread == pytest.approx(0.0, abs=1e-6)
 
 
-def test_fit_with_one_sequence_length_scales_the_formula_split():
-    probes = [_probe(1, 2048, 600.0, 60_000.0), _probe(2, 2048, 600.0, 60_000.0)]
-    quad, lin, _resid = vc.fit_rows(probes, formula_quad=400.0, formula_lin=40_000.0)
-    assert quad / lin == pytest.approx(400.0 / 40_000.0)  # the formula's split
-    assert 2 * (quad * 2048**2 + lin * 2048) / GIB == pytest.approx(probes[1]["overhead_gib"])
+def test_fit_keeps_the_highest_cost_per_token():
+    # Llama 3.2 1B on an RTX 5090, 2026-10-02: the first probe of the process
+    # ran before Unsloth's compiled loss took effect, the next two after. A
+    # fresh run peaks like the first, so that is the cost to keep.
+    probes = [
+        {"batch": 2, "seq": 2048, "overhead_gib": 2.12},
+        {"batch": 4, "seq": 2048, "overhead_gib": 2.26},
+        {"batch": 4, "seq": 1024, "overhead_gib": 1.19},
+    ]
+    quad, lin, spread = vc.fit_rows(probes)
+    assert quad == 0.0
+    assert lin == pytest.approx(2.12 * GIB / 4096)
+    assert 4 * 2048 * lin / GIB == pytest.approx(4.24)  # a fresh batch 4 run measured 4.29
+    assert spread == pytest.approx(46.7, abs=0.5)
+
+
+def test_fit_ignores_the_old_formula_arguments():
+    probes = [_probe(2, 2048, 0.0, 600_000.0)]
+    assert vc.fit_rows(probes, formula_quad=400.0, formula_lin=40_000.0) == vc.fit_rows(probes)
 
 
 def test_fit_ignores_oom_probes_and_returns_none_without_data():
@@ -124,7 +138,7 @@ def test_estimate_prefers_the_measurement(monkeypatch):
     est = estimate_vram("org/m-1B", **_SHAPE, **_QV, batch_size=4, overhead_fraction=0.0)
     assert est.source == "measured"
     trainable = 16 * (3 * 2048 + 2048 * 8 // 32) * 16  # q + v at kv_heads = heads / 4
-    expected = 1.0 + trainable * (4 + 6.3) / GIB + cal.rows_gib(4, 2048)
+    expected = 1.0 + trainable * (4 + 8.4) / GIB + cal.rows_gib(4, 2048)
     assert est.total_gb == pytest.approx(expected, rel=1e-6)
     assert any("measured on this GPU" in n for n in est.notes)
 
@@ -149,7 +163,7 @@ def test_unmeasured_rows_fall_back_to_the_formula_rows(monkeypatch):
 
 @pytest.mark.parametrize(
     "kwargs",
-    [{"use_calibration": False}, {"gradient_checkpointing": False}, {"varlen_attention": False}],
+    [{"use_calibration": False}, {"gradient_checkpointing": False}],
 )
 def test_cases_that_keep_the_formula(monkeypatch, kwargs):
     _use(monkeypatch, _cal())
@@ -159,7 +173,7 @@ def test_cases_that_keep_the_formula(monkeypatch, kwargs):
 
 def test_formula_has_the_embedding_floor():
     est = estimate_vram("org/x", **_SHAPE, **_QV, batch_size=1, max_seq_length=256,
-                        varlen_attention=False, overhead_fraction=0.0)
+                        overhead_fraction=0.0)
     assert est.activations_gb == pytest.approx(4 * 128256 * 2048 / GIB)  # 0.98 GiB measured
     assert est.source == "estimate"
 
@@ -196,10 +210,12 @@ def test_calibrate_fits_stores_and_reports_progress(monkeypatch, store):
         {"event": "probe", **probes[0]},
         {"event": "probe", **probes[1]},
         {"event": "result", "load_gib": 1.06, "floor_gib": 0.98, "trainable_params": 851_968,
-         "formula_quad": 512.0, "formula_lin": 71_680.0, "probes": probes},
+         "formula_quad": 0.0, "formula_lin": 574_464.0, "probes": probes},
     ])
     assert [e["event"] for e in events] == ["loading", "loaded", "probe", "probe"]
-    assert cal.quad_bytes == pytest.approx(512.0, rel=1e-3)
+    assert cal.quad_bytes == 0.0
+    assert cal.lin_bytes == pytest.approx(max(512.0 * 2048 + 70_000.0, 512.0 * 1024 + 70_000.0))
+    assert cal.version == 2
     assert cal.machine == MACHINE and cal.probe_trainable_params == 851_968
     assert vc.lookup("org/m-1B", machine=MACHINE).floor_gib == 0.98  # stored
 

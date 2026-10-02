@@ -337,6 +337,8 @@ def test_event_reads_are_bounded_and_resume_from_the_offset(box, tmp_path, monke
     assert manager._terminal_seen(job) is True  # found in the tail window
     assert manager._terminal_status(job) == "done"
     assert len(manager._read_events(job, limit=3)) == 3
+    assert manager.status()["status"] == "active"  # terminal event, process still exiting
+    manager._jobs[job.job_id]._alive = False
     assert manager.status()["status"] == "done"
 
 
@@ -352,3 +354,61 @@ def test_a_hostile_event_file_is_tolerated(box, tmp_path):
     rows, _offset = manager.tail_events(job, 0)
     assert any(isinstance(r, dict) and r.get("step") == 3 for r in rows)
     assert manager.status()["status"] == "active"
+
+
+# ---- a job is active until its process has exited -------------------------------------
+
+
+def _finish(job, **row):
+    with open(job.events_path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row) + "\n")
+
+
+@pytest.mark.parametrize(
+    ("row", "final"),
+    [
+        ({"kind": "done", "status": "done"}, "done"),
+        ({"kind": "done", "status": "stopped"}, "stopped"),
+        ({"kind": "error", "code": "RUNTIME_X", "message": "boom"}, "failed"),
+    ],
+)
+def test_a_finished_job_reads_active_until_its_process_exits(box, tmp_path, row, final):
+    """start() refuses a new job until the old process is gone. Reporting the
+    job finished at its terminal event let the page offer Start for a moment
+    and then refuse the click."""
+    _sandbox, data, _outside = box
+    proc = _Proc(alive=True)
+    manager, _captured = _manager(tmp_path, proc=proc)
+    job = manager.start(_spec(data))
+    _finish(job, **row)
+    status = manager.status()
+    assert (status["status"], status["finishing"]) == ("active", True)
+    with pytest.raises(JobRefusedError):
+        manager.start(_spec(data))
+    proc._alive = False
+    status = manager.status()
+    assert (status["status"], status["finishing"]) == (final, False)
+
+
+def test_a_process_that_never_exits_does_not_hold_the_page_forever(box, tmp_path, monkeypatch):
+    _sandbox, data, _outside = box
+    manager, _captured = _manager(tmp_path, proc=_Proc(alive=True))
+    job = manager.start(_spec(data))
+    _finish(job, kind="done", status="done")
+    assert manager.status()["status"] == "active"
+    clock = [time.monotonic()]
+    monkeypatch.setattr(ui_jobs.time, "monotonic", lambda: clock[0])
+    clock[0] += ui_jobs.EXIT_GRACE_S - 1
+    assert manager.status()["status"] == "active"
+    clock[0] += 2
+    status = manager.status()
+    assert (status["status"], status["finishing"]) == ("done", False)
+
+
+def test_a_running_job_is_not_finishing(box, tmp_path):
+    _sandbox, data, _outside = box
+    manager, _captured = _manager(tmp_path, proc=_Proc(alive=True))
+    job = manager.start(_spec(data))
+    _finish(job, kind="step", step=3, total_steps=10, loss=1.0)
+    status = manager.status()
+    assert (status["status"], status["finishing"]) == ("active", False)

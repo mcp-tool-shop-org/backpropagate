@@ -868,6 +868,9 @@ class TrainState(rx.State):
     vram_est_total: float = 0.0
     vram_est_batch: int = 0
     vram_est_note: str = ""
+    # Latest refresh wins: refreshes run concurrently off the event loop and
+    # the first one (which imports the trainer module) can finish last.
+    _vram_est_seq: int = 0
     # Why the last run stopped when the GPU temperature limit tripped.
     job_safety_reason: str = ""
 
@@ -1238,6 +1241,8 @@ class TrainState(rx.State):
         from .ui_jobs import vram_verdict
 
         async with self:
+            self._vram_est_seq += 1
+            seq = self._vram_est_seq
             args = (
                 self.model,
                 "full" if self.train_mode == "full" else "lora",
@@ -1254,6 +1259,8 @@ class TrainState(rx.State):
             )
         )
         async with self:
+            if seq != self._vram_est_seq:
+                return  # a newer refresh started; it owns the numbers
             self.vram_est_verdict = str(result.get("verdict") or "unknown")
             self.vram_est_total = float(result.get("total_gb") or 0.0)
             self.vram_est_batch = int(result.get("batch") or 0)

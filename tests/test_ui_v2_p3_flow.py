@@ -185,6 +185,7 @@ def _fill_common(page, dataset: Path, steps: str, batch: str) -> None:
     page.get_by_label("Batch size (number or auto)").fill(batch)
 
 
+@pytest.mark.timeout(3600)
 def test_p3_new_controls_reach_the_run(ui):
     launch, sandbox = ui
     base = f"http://127.0.0.1:{launch.port}"
@@ -216,15 +217,32 @@ def test_p3_new_controls_reach_the_run(ui):
         page.get_by_text("Advanced", exact=True).click()
         page.get_by_label("Run name for experiment trackers (optional)").fill("p3-flow")
         page.get_by_label("GPU temperature limit in Celsius (stop and save above this)").fill("95")
-        time.sleep(3.0)  # the estimate refreshes off the event loop
-        shown = page.locator("#bp-vram-estimate").inner_text()
-        verdict = page.locator("#bp-vram-verdict").inner_text()
-        ui_total = float(shown.split(" GB")[0])
         cli_total = _cli_estimate(
             "meta-llama/Llama-3.2-1B-Instruct", "--lora-r", "16", "--batch-size", "2",
             "--no-4bit",
         )
-        assert abs(ui_total - cli_total) <= 0.05, (shown, cli_total)
+
+        # The estimate refreshes off the event loop as each field changes;
+        # the shown number must settle on the CLI's for the same settings.
+        def _ui_total() -> float | None:
+            text = page.locator("#bp-vram-estimate").inner_text().strip()
+            try:
+                return float(text.split(" GB")[0]) if text else None
+            except ValueError:
+                return None
+
+        try:
+            _wait_until(
+                lambda: (t := _ui_total()) is not None and abs(t - cli_total) <= 0.05,
+                90.0,
+                "the inline estimate to match estimate-vram",
+            )
+        except AssertionError:
+            raise AssertionError(
+                (page.locator("#bp-vram-estimate").inner_text(), cli_total)
+            ) from None
+        shown = page.locator("#bp-vram-estimate").inner_text()
+        verdict = page.locator("#bp-vram-verdict").inner_text()
         _shot(page, "train-configured")
         before = {d.name for d in _job_dirs(sandbox)}
         page.get_by_role("button", name="Start training").click()

@@ -182,8 +182,16 @@ def _with_tokens(page: rx.Component) -> rx.Component:
 # The toggle button in ``BpHeader`` reads/writes via ``rx.color_mode`` +
 # ``rx.toggle_color_mode`` (the documented Reflex 0.9 surface); see
 # ``ui_app/chrome.py``.
+#
+# ui-v2 (Director, 2026-10-02): the UI opens in DARK mode by default. On
+# Reflex 0.9.3 a literal appearance only sets ``defaultColorMode`` in
+# ``.web/utils/context.js`` (the ThemeProvider's ``defaultTheme``); Theme's
+# ``_render`` removes the ``appearance`` prop, so it does not pin the Radix
+# theme the way v1.2's did. The header toggle still switches, and the choice
+# persists (next-themes keeps it in localStorage). A literal string, so the
+# ``rawColorMode`` ReferenceError above cannot recur.
 app = rx.App(
-    theme=rx.theme(appearance="inherit", **RADIX_THEME),
+    theme=rx.theme(appearance="dark", **RADIX_THEME),
     stylesheets=STYLESHEETS,
     api_transformer=(
         security_headers_middleware,

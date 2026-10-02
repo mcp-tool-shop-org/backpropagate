@@ -742,12 +742,14 @@ class TestAppWiring:
         comp = page.component() if callable(page.component) else page.component
         assert "--bp-teal" in _render(comp)
 
-    def test_theme_follows_the_live_color_mode_without_a_hard_coded_appearance(self):
+    def test_theme_defaults_to_dark_without_pinning_the_radix_theme(self):
         from backpropagate.ui_app.app import app
 
-        # FRONTEND-F-001: appearance follows the live colour mode (Radix "inherit" picks up
-        # the light/dark class Reflex's provider writes on <html>), not a hard-coded "dark".
-        assert '"inherit"' in str(app.theme.appearance)
+        # ui-v2: the UI opens dark by default (Director, 2026-10-02). The
+        # appearance only sets the default colour mode: Theme's render drops
+        # the prop, so the header toggle can still switch (FRONTEND-F-001).
+        assert '"dark"' in str(app.theme.appearance)
+        assert "appearance" not in str(app.theme.render())
 
     def test_theme_does_not_leak_the_color_mode_var_into_the_compiled_context(self):
         """``appearance=rx.color_mode`` compiled to ``defaultColorMode = rawColorMode``.
@@ -763,7 +765,8 @@ class TestAppWiring:
         lines = _compile_contexts(None, app.theme).splitlines()
         (default_line,) = [ln for ln in lines if ln.startswith("export const defaultColorMode")]
         assert "rawColorMode" not in default_line
-        assert default_line.rstrip(";").endswith('"system"')
+        # ui-v2: dark by default (Director, 2026-10-02); was "system".
+        assert default_line.rstrip(";").endswith('"dark"')
 
     def test_import_refuses_when_auth_module_import_fails(self, monkeypatch):
         """Mocked: ``backpropagate.ui_app.auth`` import is made to raise."""

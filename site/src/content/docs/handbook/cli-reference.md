@@ -47,6 +47,13 @@ backprop train --data my_data.jsonl --model Qwen/Qwen2.5-7B-Instruct --steps 100
 | `--batch-size` | `auto` | Per-device batch size. `auto` queries GPU VRAM. |
 | `--lr` | `2e-4` | Learning rate (must be > 0). |
 | `--lora-r` | `256` | LoRA rank (must be > 0). v1.3 default; pass `--lora-preset=fast` for the v1.2.x rank-16 footprint. |
+| `--lora-alpha` | unset (settings `512`) | **1.8.2** — LoRA alpha (scaling); must be > 0. Default is `BACKPROPAGATE_LORA__LORA_ALPHA`. `--mode lora` only. |
+| `--lora-dropout` | unset (settings `0.05`) | **1.8.2** — LoRA dropout, `0 <= x < 1`. Default is `BACKPROPAGATE_LORA__LORA_DROPOUT`. `--mode lora` only. |
+| `--target-modules` | unset (settings `all-linear`) | **1.8.2** — LoRA target modules for this run only: comma-separated module names (`q_proj,v_proj`) or the literal `all-linear`. Overrides the settings value (and `--lora-preset`'s modules) in both the Unsloth and the transformers loader. Empty entries and names that are not identifiers (dots allowed) exit `1` with `[INPUT_VALIDATION_FAILED]`. `--mode lora` only. |
+| `--no-4bit` | off | **1.8.2** — load the base model unquantized (16-bit) for LoRA instead of 4-bit QLoRA. Needs more VRAM (`backprop estimate-vram --no-4bit` shows how much). Ignored with `--mode full`, which already loads unquantized. |
+| `--run-name` | unset | **1.8.2** — experiment-tracker run name (W&B / MLflow / TensorBoard) for this run. Default: a generated `backprop-<run_id>`. Has no effect with `--report-to none`. |
+| `--no-gradient-checkpointing` | off | **1.8.2** — turn gradient checkpointing off (faster, uses more VRAM). Ignored with `--mode full`, which always checkpoints (a warning is logged). |
+| `--gpu-max-temp` | unset | **1.8.2** — stop the run cleanly, saving a checkpoint, when the GPU stays at or above this temperature (C) for 3 consecutive readings taken every 5 s. Range `50`–`105`. Uses the same cooperative stop as the UI Stop button, never a kill. Needs a readable GPU temperature (pynvml or `nvidia-smi`); with none the limit never trips. |
 | `--output`, `-o` | `./output` | Output directory. |
 | `--no-unsloth` | off | Disable Unsloth even if available. |
 | `--report-to` | `auto` | **1.8.2** — experiment tracker: `auto` / `none` / `wandb` / `tensorboard` / `mlflow`. `auto` uses every tracker that is installed, and W&B only when it is logged in (`wandb login` or `WANDB_API_KEY`) or `WANDB_MODE` is `offline` / `disabled`. `none` turns tracking off. Naming `wandb` when it is installed but not logged in stops the run with `CONFIG_INVALID_SETTING` before the model loads. |
@@ -93,6 +100,16 @@ backprop multi-run --data my_data.jsonl --runs 5 --steps 100
 | `--steps` | `100` | Steps per run. |
 | `--samples` | `1000` | Samples per run. The matching Python-API knob is `samples_per_run`. |
 | `--merge-mode` | `slao` | One of `slao` / `simple`. |
+| `--lr` | unset (`2e-4`) | **1.8.2** — starting learning rate (must be > 0). The sweep still decays it across runs, ending at a quarter of the start (the default `2e-4` → `5e-5` shape). |
+| `--batch-size` | `auto` | **1.8.2** — per-device batch size: `auto` or a positive integer. Applies to every run. |
+| `--lora-r` | unset (settings `256`) | **1.8.2** — LoRA rank (must be > 0). Applies to every run. |
+| `--lora-alpha` | unset (settings `512`) | **1.8.2** — same as `backprop train`. |
+| `--lora-dropout` | unset (settings `0.05`) | **1.8.2** — same as `backprop train`. |
+| `--target-modules` | unset (settings `all-linear`) | **1.8.2** — same as `backprop train`. |
+| `--no-4bit` | off | **1.8.2** — same as `backprop train`. |
+| `--run-name` | unset | **1.8.2** — experiment-tracker run name; run N is reported as `NAME-runN` (`NAME-run1`, `NAME-run2`, ...). Default: a generated `backprop-<run_id>-run-NNN`. |
+| `--no-gradient-checkpointing` | off | **1.8.2** — same as `backprop train`. |
+| `--gpu-max-temp` | unset | **1.8.2** — same as `backprop train`, but a trip saves the current run and ends the whole session (the runs already merged are kept). |
 | `--output`, `-o` | `./output` | Output directory. |
 | `--lora-preset` | `quality` | Same as `backprop train`. |
 | `--use-dora` | off | Same as `backprop train`. |
@@ -484,7 +501,8 @@ backprop estimate-vram --json                                # machine-readable
 |------|---------|-------------|
 | `model` (positional) | `Qwen/Qwen2.5-7B-Instruct` | Model name (used only for the printed header — VRAM tiers are model-agnostic). |
 | `--vram-gb` | unset (auto-detect) | Override the detected VRAM (in GB) so you can simulate the table for a card you don't currently have. Default: query the primary CUDA device. Range: `(0, 512]`. |
-| `--json` | off | Emit the table as JSON for CI / scripting consumers. |
+| `--no-4bit` | off | **1.8.2** — estimate with an unquantized (16-bit) base model instead of the default 4-bit QLoRA base, matching `backprop train --no-4bit`. Also triggers the per-config estimate. |
+| `--json` | off | Emit the table as JSON for CI / scripting consumers. The payload carries `quantize_base` (`true` for the default 4-bit base, `false` with `--no-4bit`). |
 
 Useful before starting a long training run on a card you haven't profiled, or while sizing infra spend.
 

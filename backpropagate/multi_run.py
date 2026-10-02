@@ -530,6 +530,25 @@ class MultiRunConfig:
     eval_metrics: list[str] | None = None      # None → loss-only gate (no task-metric conjunction)
     eval_references_path: str | None = None    # JSONL of {prompt, reference|references}; None → no task metrics
 
+    # ui-v2 P3 (CLI parity): per-session overrides forwarded to the inner
+    # ``Trainer`` (``backprop multi-run --lora-r / --lora-alpha / --lora-dropout
+    # / --batch-size / --target-modules / --no-4bit / --no-gradient-checkpointing
+    # / --run-name``). Every field defaults to ``None`` ⇒ the inner Trainer's own
+    # defaults (settings layer, auto batch size) apply and a default multi-run is
+    # byte-identical to before. They are real dataclass fields on purpose: the
+    # CLI's ``dataclasses.fields(MultiRunConfig)`` filter routes by field name,
+    # and a name missing here would be silently dropped.
+    lora_r: int | None = None
+    lora_alpha: int | None = None
+    lora_dropout: float | None = None
+    batch_size: int | str | None = None  # int, or "auto" (== None: let the Trainer pick)
+    target_modules: str | list[str] | None = None  # list of names or "all-linear"
+    load_in_4bit: bool | None = None  # False ⇒ unquantized 16-bit base for LoRA
+    gradient_checkpointing: bool | None = None  # False ⇒ checkpointing off (LoRA only)
+    # Tracker run name. Each run is reported as ``<run_name>-run<N>`` (1-based);
+    # None keeps the generated ``backprop-<run_id[:12]>-run-<NNN>``.
+    run_name: str | None = None
+
 
 # Backwards compatibility alias
 SpeedrunConfig = MultiRunConfig
@@ -1400,6 +1419,10 @@ class MultiRunTrainer:
                 # construction); mode='lora' (default) preserves byte-
                 # identical pre-Wave-6b multi-run behavior.
                 mode=self.config.mode,
+                # ui-v2 P3: only the overrides the operator actually set are
+                # forwarded (None fields are left out), so a default multi-run
+                # constructs the inner Trainer exactly as before.
+                **self._trainer_override_kwargs(),
             )
             self._trainer.load_model()
 
@@ -1714,6 +1737,30 @@ class MultiRunTrainer:
                 )
         return result
 
+    def _trainer_override_kwargs(self) -> dict[str, Any]:
+        """Inner-``Trainer`` kwargs for the ui-v2 P3 per-session overrides.
+
+        Only fields the operator set (non-None) are included; ``batch_size``
+        ``"auto"`` is the Trainer's own default so it is left out too.
+        """
+        cfg = self.config
+        kwargs: dict[str, Any] = {}
+        for name in (
+            "lora_r",
+            "lora_alpha",
+            "lora_dropout",
+            "target_modules",
+            "load_in_4bit",
+            "gradient_checkpointing",
+        ):
+            value = getattr(cfg, name, None)
+            if value is not None:
+                kwargs[name] = value
+        batch_size = getattr(cfg, "batch_size", None)
+        if batch_size is not None and batch_size != "auto":
+            kwargs["batch_size"] = batch_size
+        return kwargs
+
     def abort(self, reason: str = "User requested abort") -> None:
         """Request abort of current multi-run session.
 
@@ -1935,6 +1982,9 @@ class MultiRunTrainer:
             if (self._run_id and report_to_resolved != "none")
             else None
         )
+        # ui-v2 P3: --run-name NAME reports every run as ``NAME-run<N>``.
+        if getattr(self.config, "run_name", None) and report_to_resolved != "none":
+            run_name = f"{self.config.run_name}-run{run_idx}"
 
         # B-002: per-run OOM retry. We keep retrying with halved batch until
         # batch_size hits 1 (the floor). At the floor, _OOM_MAX_RETRIES_AT_MIN_BATCH
@@ -1987,6 +2037,10 @@ class MultiRunTrainer:
                 # ``self.mode`` instance attribute (mirrors the
                 # ``packing`` / ``optim`` threading pattern above).
                 mode=self._trainer.mode,
+                # ui-v2 P3: --no-gradient-checkpointing (None otherwise).
+                gradient_checkpointing=getattr(
+                    self._trainer, "_gradient_checkpointing_override", None
+                ),
             )
 
             # BACKEND-F-001: wire the abort callback into the inner

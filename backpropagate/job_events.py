@@ -30,9 +30,13 @@ Event kinds written by this module:
                   ``runs`` is starting. Step events then carry the session-wide
                   step (``(run - 1) * steps_per_run + local step``).
 - ``checkpoint`` ``{ts, kind, path}`` — from ``on_save``.
-- ``done``       ``{ts, kind, status, steps_done}`` — terminal record, written
-                  by ``cli.py`` (which owns the outcome) via
-                  :meth:`JobEventWriter.done`.
+- ``safety``     ``{ts, kind, reason}`` — a safety limit (``--gpu-max-temp``)
+                  ended the run early; written by :meth:`JobEventWriter.safety`
+                  when the limit trips.
+- ``done``       ``{ts, kind, status, steps_done[, output_path][, reason]}`` —
+                  terminal record, written by ``cli.py`` (which owns the
+                  outcome) via :meth:`JobEventWriter.done`. ``reason`` is set
+                  only for a ``stopped`` run that a safety limit ended.
 - ``error``      ``{ts, kind, status, code, message, hint, traceback_tail}``.
 
 The stop contract: ``control.json`` with a JSON object whose ``action`` is
@@ -122,11 +126,24 @@ class JobEventWriter:
         status: str,
         steps_done: int,
         output_path: str | None = None,
+        reason: str | None = None,
     ) -> None:
         row: dict[str, Any] = {"kind": "done", "status": status, "steps_done": steps_done}
         if output_path:
             row["output_path"] = output_path
+        if reason:
+            # Why a "stopped" run stopped when it was not the operator's Stop
+            # (e.g. the --gpu-max-temp limit tripped).
+            row["reason"] = reason
         self.write(row)
+
+    def safety(self, reason: str) -> None:
+        """A safety limit ended the run early (e.g. GPU over ``--gpu-max-temp``).
+
+        Written the moment the limit trips; the terminal ``done`` event that
+        follows carries ``status="stopped"`` and the same ``reason``.
+        """
+        self.write({"kind": "safety", "reason": str(reason)})
 
     def error(
         self,

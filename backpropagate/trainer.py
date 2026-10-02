@@ -1506,6 +1506,11 @@ def _build_sft_config(
     # Wave 6a.5 hotfix rather than fork the helper.
     mode: str = "lora",
     full_ft_offload: bool = False,
+    # ui-v2 P3: ``False`` (``--no-gradient-checkpointing``) forces
+    # ``gradient_checkpointing=False`` on the SFTConfig for mode='lora' (TRL's
+    # default is True, so omitting it is not enough). None / True leave the
+    # config exactly as before; mode='full' ignores it (always checkpoints).
+    gradient_checkpointing: bool | None = None,
 ) -> Any:
     """Assemble an ``SFTConfig`` with the v1.3 quality contracts applied.
 
@@ -1647,6 +1652,10 @@ def _build_sft_config(
         # default for HF gradient checkpointing — avoids the silent bug
         # where reentrant=True breaks DDP gradients on some models.
         kwargs["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
+    elif gradient_checkpointing is False:
+        # --no-gradient-checkpointing (mode='lora'): TRL's SFTConfig defaults
+        # gradient_checkpointing=True, so it must be turned off explicitly.
+        kwargs["gradient_checkpointing"] = False
 
     # v1.7: FSDP2 CPU-offload for the full-FT escape hatch. Spills params +
     # optimizer state into host RAM via fully_shard + CPUOffloadPolicy so a
@@ -2653,6 +2662,27 @@ class Trainer:
         block_order: str | None = None,
         block_writeback: str | None = None,
         block_train_embeddings: bool | None = None,
+        # ui-v2 P3 (CLI parity): per-run overrides the web form passes through
+        # ``backprop train`` / ``backprop multi-run``. All default to None ⇒ the
+        # settings layer governs and a caller who never passes them sees the
+        # exact pre-P3 behavior.
+        #
+        # ``target_modules`` — LoRA target modules for THIS run: a list of
+        # module names or the PEFT wildcard ``"all-linear"``. Overrides
+        # ``settings.lora.target_modules`` in BOTH loaders (unsloth +
+        # transformers/PEFT). mode='full' attaches no adapter, so it is ignored
+        # there.
+        target_modules: str | list[str] | None = None,
+        # ``gradient_checkpointing`` — False turns activation checkpointing off
+        # for THIS run (overrides ``settings.lora.use_gradient_checkpointing``
+        # in the unsloth loader, ``prepare_model_for_kbit_training`` in the
+        # transformers loader, and the SFTConfig flag). None/True keep the
+        # historical behavior. mode='full' always checkpoints (the 16 GB-card
+        # memory contract) and logs one WARNING when asked to turn it off.
+        gradient_checkpointing: bool | None = None,
+        # ``run_name`` — experiment-tracker (W&B / MLflow / TensorBoard) run
+        # name. None keeps the generated ``backprop-<run_id[:12]>``.
+        run_name: str | None = None,
     ) -> None:
         # Use settings as defaults, override with provided values
         # NOTE: Use `is not None` checks instead of falsy `or` to allow
@@ -3068,6 +3098,24 @@ class Trainer:
         # thread into BitsAndBytesConfig / FastLanguageModel.
         self._load_in_4bit_explicit = load_in_4bit is not None
         self._load_in_4bit = load_in_4bit if load_in_4bit is not None else True
+        # ui-v2 P3: per-run overrides (see the __init__ signature). Stored RAW
+        # (None = "defer to settings") and resolved at load / build time so a
+        # settings change between construction and load_model() still applies.
+        self._target_modules_override = target_modules
+        self._gradient_checkpointing_override = gradient_checkpointing
+        self.run_name = run_name
+        if self.mode == "full":
+            if gradient_checkpointing is False:
+                logger.warning(
+                    "gradient_checkpointing=False is ignored with mode='full': "
+                    "full fine-tuning always uses gradient checkpointing "
+                    "(activation-memory contract). Flag ignored."
+                )
+            if target_modules is not None:
+                logger.info(
+                    "target_modules is ignored with mode='full' (no LoRA "
+                    "adapter is attached)."
+                )
         # v1.5 T2.1: FP8-effective state. Stays False unless load_model()
         # successfully converts ≥1 base linear to Float8Linear; the gate ladder
         # below may also force it False (unsupported card / missing lib) BEFORE
@@ -4632,6 +4680,26 @@ class Trainer:
         # torchao install raises RUNTIME_FP8_UNSUPPORTED.
         self._apply_fp8_to_base()
 
+    def _resolved_target_modules(self) -> str | list[str]:
+        """LoRA target modules for this run: the per-run override
+        (``target_modules=`` / ``--target-modules``) when given, else
+        ``settings.lora.target_modules``. Read by BOTH loaders."""
+        override: str | list[str] | None = getattr(self, "_target_modules_override", None)
+        if override is not None:
+            return override
+        resolved: str | list[str] = settings.lora.target_modules
+        return resolved
+
+    def _gradient_checkpointing_disabled(self) -> bool:
+        """True when the operator turned gradient checkpointing OFF for this
+        run (``gradient_checkpointing=False`` / ``--no-gradient-checkpointing``).
+
+        mode='full' never honors it (full fine-tuning always checkpoints)."""
+        return (
+            getattr(self, "_gradient_checkpointing_override", None) is False
+            and self.mode != "full"
+        )
+
     def _load_with_unsloth(self) -> None:
         """Load model using Unsloth for 2x faster training.
 
@@ -4711,8 +4779,9 @@ class Trainer:
         # passing it — keeps the call backward-compatible with older
         # Unsloth releases whose get_peft_model signature doesn't accept
         # the v1.3 kwargs.
+        requested_target_modules = self._resolved_target_modules()
         target_modules = _unsloth_target_modules(
-            settings.lora.target_modules, self._model
+            requested_target_modules, self._model
         )
         if not target_modules:
             # No linear layers found: refuse here so load_model's fallback to
@@ -4720,7 +4789,7 @@ class Trainer:
             raise ModelLoadError(
                 self.model_name,
                 "Failed to apply LoRA: target_modules="
-                f"{settings.lora.target_modules!r} matched no linear layers in "
+                f"{requested_target_modules!r} matched no linear layers in "
                 "the Unsloth-loaded model",
             )
         lora_kwargs: dict[str, Any] = {
@@ -4729,7 +4798,13 @@ class Trainer:
             "lora_alpha": self.lora_alpha,
             "lora_dropout": self.lora_dropout,
             "bias": "none",
-            "use_gradient_checkpointing": settings.lora.use_gradient_checkpointing,
+            # --no-gradient-checkpointing wins over settings.lora.
+            # use_gradient_checkpointing ("unsloth" by default).
+            "use_gradient_checkpointing": (
+                False
+                if self._gradient_checkpointing_disabled()
+                else settings.lora.use_gradient_checkpointing
+            ),
             "random_state": settings.lora.random_state,
         }
         # v1.3 BACKEND-3: forward use_dora only when True so we don't
@@ -4770,7 +4845,7 @@ class Trainer:
         self.lora_adapted_modules = _count_lora_layers(self._model)
         logger.info(
             "Unsloth LoRA: target_modules=%s (from %r); %d modules adapted.",
-            target_modules, settings.lora.target_modules,
+            target_modules, requested_target_modules,
             self.lora_adapted_modules,
         )
 
@@ -4917,7 +4992,17 @@ class Trainer:
         # non-quantized model and still enables gradient checkpointing + input
         # grads, so it runs for both LoRA variants (byte-identical to pre-v1.5
         # for the 4-bit path).
-        self._model = prepare_model_for_kbit_training(self._model)
+        #
+        # --no-gradient-checkpointing: prepare_model_for_kbit_training turns
+        # gradient checkpointing on by default, so the opt-out must be passed
+        # here (the SFTConfig flag is handled in _build_sft_config). Only
+        # forwarded when the operator asked, so the default call is unchanged.
+        if self._gradient_checkpointing_disabled():
+            self._model = prepare_model_for_kbit_training(
+                self._model, use_gradient_checkpointing=False
+            )
+        else:
+            self._model = prepare_model_for_kbit_training(self._model)
 
         # Apply LoRA. v1.3 BACKEND-3 / BACKEND-6: thread use_dora and
         # init_lora_weights through to PEFT. Built as a kwargs dict so
@@ -4925,10 +5010,11 @@ class Trainer:
         # that doesn't accept the field doesn't make us crash on this
         # call. The trainer logs a warning + carries on with vanilla
         # LoRA when the kwarg is rejected.
+        requested_target_modules = self._resolved_target_modules()
         lora_kwargs: dict[str, Any] = {
             "r": self.lora_r,
             "lora_alpha": self.lora_alpha,
-            "target_modules": settings.lora.target_modules,
+            "target_modules": requested_target_modules,
             "lora_dropout": self.lora_dropout,
             "bias": "none",
             "task_type": "CAUSAL_LM",
@@ -4974,7 +5060,7 @@ class Trainer:
         self.lora_adapted_modules = _count_lora_layers(self._model)
         logger.info(
             "PEFT LoRA: target_modules=%r; %d modules adapted.",
-            settings.lora.target_modules, self.lora_adapted_modules,
+            requested_target_modules, self.lora_adapted_modules,
         )
 
     def _build_trainer(
@@ -5286,6 +5372,8 @@ class Trainer:
             # v1.7: thread the FSDP2 CPU-offload opt-in so _build_sft_config
             # wires fsdp/fsdp_config for the full-FT escape hatch.
             full_ft_offload=self.full_ft_offload,
+            # ui-v2 P3: --no-gradient-checkpointing (None otherwise).
+            gradient_checkpointing=getattr(self, "_gradient_checkpointing_override", None),
         )
         # v1.5 T2.1 (FP8): layer the FP8 shape requirement ON TOP of the built
         # SFTConfig rather than threading fp8 into _build_sft_config (which
@@ -5744,7 +5832,12 @@ class Trainer:
             except Exception as exc:
                 logger.warning(f"Resume lookup failed: {exc}")
         run_id = run_id_for_resume or uuid.uuid4().hex
-        run_name = f"backprop-{run_id[:12]}" if report_to != "none" else None
+        # ui-v2 P3: --run-name overrides the generated tracker run name.
+        run_name = (
+            (getattr(self, "run_name", None) or f"backprop-{run_id[:12]}")
+            if report_to != "none"
+            else None
+        )
 
         # v1.3 BACKEND-5 / BACKEND-7 + Wave 6a BACKEND-A-003: training-args
         # assembly is delegated to a module-level helper so the same defaults

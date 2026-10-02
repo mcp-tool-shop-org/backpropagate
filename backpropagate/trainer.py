@@ -1809,6 +1809,150 @@ def _full_ft_needs_paged_optimizer(
     return bool(needed > free_bytes * _FULL_FT_UNPAGED_SHARE)
 
 
+#: A LoRA shape is chosen automatically when its estimate at batch 1 is within
+#: this share of the GPU memory that is free; an automatic batch size when its
+#: estimate is within this one.
+_AUTO_SHAPE_SHARE = 0.85
+_AUTO_BATCH_SHARE = 0.90
+_AUTO_BATCH_SIZES = (8, 6, 4, 2, 1)
+
+
+def _free_vram_gib() -> float | None:
+    """GPU memory free right now on the current CUDA device (GiB), or None
+    when there is no CUDA device or it cannot be asked."""
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        free_bytes, _total = torch.cuda.mem_get_info()
+        return float(free_bytes) / (1024**3)
+    except Exception as exc:  # noqa: BLE001 - advisory; the caller keeps its defaults
+        logger.debug("free VRAM query failed: %r", exc)
+        return None
+
+
+@dataclass
+class LoraShape:
+    """A resolved LoRA shape: which preset, and its rank, alpha and targets."""
+
+    preset: str  # "quality" | "balanced" | "fast" | "custom"
+    r: int
+    lora_alpha: int
+    target_modules: str | list[str] | None  # None: the settings value
+    chosen_for_card: bool = False  # picked by fit, not named by the caller
+    fits: bool = True
+    note: str = ""
+
+
+def resolve_lora_shape(
+    model: str,
+    *,
+    preset: str | None = None,
+    lora_r: int | None = None,
+    lora_alpha: int | None = None,
+    target_modules: str | list[str] | None = None,
+    max_seq_length: int = 2048,
+    quantize_base: bool = True,
+    gradient_checkpointing: bool = True,
+    free_gib: float | None = None,
+) -> LoraShape:
+    """Decide the LoRA rank, alpha and target modules for a run.
+
+    * A named preset (``"quality"``, ``"balanced"``, ``"fast"``) is that
+      shape; an explicit ``lora_r`` / ``lora_alpha`` / ``target_modules``
+      replaces that one field.
+    * ``None`` / ``"auto"`` with any explicit field, or with LoRA settings
+      changed from their defaults (``BACKPROPAGATE_LORA__*``), is the
+      caller's own shape: explicit fields, the rest from settings. Nothing is
+      chosen for them.
+    * ``None`` / ``"auto"`` with nothing set picks the largest preset whose
+      estimate at batch 1 (:func:`estimate_vram`, full ``max_seq_length``
+      rows) is within 85% of ``free_gib``: quality, then balanced, then fast.
+      With ``free_gib`` None (no CUDA device) it is quality, as before.
+      When nothing fits it is fast, with ``fits=False``.
+
+    The default used to be rank 256 on every linear layer whatever the card.
+    On a 7B model that needs about 17 GB at batch 1, so on a 16 GB card it
+    could not run, and halving the batch could not fix it. Raises
+    ``ValueError`` for an unknown preset name.
+    """
+    from .config import LORA_PRESET_ORDER, LORA_PRESETS
+
+    name = (preset or "auto").strip().lower()
+    if name != "auto" and name not in LORA_PRESETS:
+        raise ValueError(
+            f"Unknown LoRA preset {preset!r}. Available: auto, " + ", ".join(LORA_PRESET_ORDER)
+        )
+    if name != "auto":
+        chosen = LORA_PRESETS[name]
+        return LoraShape(
+            preset=name,
+            r=int(lora_r) if lora_r is not None else chosen.r,
+            lora_alpha=int(lora_alpha) if lora_alpha is not None else chosen.lora_alpha,
+            target_modules=target_modules if target_modules is not None else chosen.target_modules,
+        )
+
+    quality = LORA_PRESETS["quality"]
+    settings_changed = (
+        settings.lora.r != quality.r
+        or settings.lora.lora_alpha != quality.lora_alpha
+        or settings.lora.target_modules != quality.target_modules
+    )
+    if lora_r is not None or lora_alpha is not None or target_modules is not None or settings_changed:
+        return LoraShape(
+            preset="custom",
+            r=int(lora_r) if lora_r is not None else int(settings.lora.r),
+            lora_alpha=int(lora_alpha) if lora_alpha is not None else int(settings.lora.lora_alpha),
+            target_modules=target_modules,
+        )
+    if free_gib is None or free_gib <= 0:
+        return LoraShape("quality", quality.r, quality.lora_alpha, None)
+
+    budget = free_gib * _AUTO_SHAPE_SHARE
+    needs: dict[str, float] = {}
+    for candidate in LORA_PRESET_ORDER:
+        shape = LORA_PRESETS[candidate]
+        try:
+            needs[candidate] = float(
+                estimate_vram(
+                    model,
+                    lora_r=shape.r,
+                    batch_size=1,
+                    max_seq_length=max_seq_length,
+                    quantize_base=quantize_base,
+                    gradient_checkpointing=gradient_checkpointing,
+                    target_modules=shape.target_modules,
+                ).total_gb
+            )
+        except Exception as exc:  # noqa: BLE001 - no estimate: keep the long-standing default
+            logger.debug("LoRA shape estimate failed for %s: %r", candidate, exc)
+            return LoraShape("quality", quality.r, quality.lora_alpha, None)
+        if needs[candidate] <= budget:
+            note = ""
+            if candidate != "quality":
+                note = (
+                    f"LoRA preset {candidate} (rank {shape.r}) chosen for this GPU: "
+                    f"quality (rank {quality.r}) needs about {needs['quality']:.1f} GB "
+                    f"at batch 1 and {free_gib:.1f} GB is free. Pass --lora-preset "
+                    "quality (or lora_preset='quality') to use it anyway."
+                )
+            return LoraShape(
+                candidate, shape.r, shape.lora_alpha,
+                None if candidate == "quality" else shape.target_modules,
+                chosen_for_card=True, note=note,
+            )
+    fast = LORA_PRESETS["fast"]
+    return LoraShape(
+        "fast", fast.r, fast.lora_alpha, fast.target_modules, chosen_for_card=True, fits=False,
+        note=(
+            f"No LoRA preset is estimated to fit: even fast (rank {fast.r}) needs about "
+            f"{needs['fast']:.1f} GB at batch 1 and {free_gib:.1f} GB is free. Using fast; "
+            "a smaller model or a shorter --max-seq-length is the fix."
+        ),
+    )
+
+
 def _build_sft_config(
     output_dir: str,
     per_device_train_batch_size: int,
@@ -3951,6 +4095,39 @@ class Trainer:
         # Apply Windows fixes
         self._apply_windows_fixes()
 
+        # LoRA shape and batch that fit this GPU (see resolve_lora_shape).
+        if self.mode == "lora":
+            try:
+                shape = resolve_lora_shape(
+                    self.model_name,
+                    preset=lora_preset,
+                    lora_r=lora_r,
+                    lora_alpha=lora_alpha,
+                    target_modules=target_modules,
+                    max_seq_length=self.max_seq_length,
+                    quantize_base=bool(self._load_in_4bit),
+                    gradient_checkpointing=gradient_checkpointing is not False,
+                    free_gib=_free_vram_gib(),
+                )
+            except ValueError as exc:
+                raise InvalidSettingError(
+                    setting_name="lora_preset",
+                    value=lora_preset,
+                    expected="one of: auto, quality, balanced, fast",
+                    suggestion=str(exc),
+                ) from exc
+            self.lora_r, self.lora_alpha = shape.r, shape.lora_alpha
+            if shape.target_modules is not None:
+                self._target_modules_override = shape.target_modules
+            if shape.preset != "custom":
+                self.lora_preset = shape.preset
+            elif self.lora_preset == "auto":
+                self.lora_preset = "quality"  # the label run history has always carried
+            if shape.note:
+                (logger.info if shape.fits else logger.warning)(shape.note)
+        if batch_size == "auto":
+            self.batch_size = self._fit_auto_batch(self.batch_size)
+
         logger.info(f"Trainer initialized: {self.model_name}")
         logger.info(f"  LoRA: r={self.lora_r}, alpha={self.lora_alpha}")
         logger.info(f"  Batch: {self.batch_size}, LR: {self.learning_rate}")
@@ -4106,6 +4283,56 @@ class Trainer:
             if settings.windows.cuda_launch_blocking:
                 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
             logger.debug("Applied Windows-specific fixes")
+
+    def _fit_auto_batch(self, tier_batch: int) -> int:
+        """Lower the card tier's automatic batch size to one that fits.
+
+        The tier table picks a batch from the size of the card alone, so it
+        was too high for a large model or a large adapter (batch 2 on a 16 GB
+        card for a 7B model at rank 256). The largest batch at or below the
+        tier's whose estimate is within 90% of free GPU memory is used. It is
+        never raised above the tier's: a bigger automatic batch would change
+        how long a run of N steps takes for everyone.
+        """
+        free_gib = _free_vram_gib()
+        if free_gib is None or free_gib <= 0 or getattr(self, "full_ft_offload", False):
+            return tier_batch
+        budget = free_gib * _AUTO_BATCH_SHARE
+        need = 0.0
+        try:
+            targets = self._resolved_target_modules() if self.mode == "lora" else None
+            for batch in _AUTO_BATCH_SIZES:
+                if batch > tier_batch:
+                    continue
+                need = float(
+                    estimate_vram(
+                        self.model_name,
+                        mode=self.mode,
+                        lora_r=int(self.lora_r),
+                        batch_size=batch,
+                        max_seq_length=int(self.max_seq_length),
+                        quantize_base=bool(self._load_in_4bit),
+                        gradient_checkpointing=(
+                            getattr(self, "_gradient_checkpointing_override", None) is not False
+                        ),
+                        target_modules=targets,
+                    ).total_gb
+                )
+                if need <= budget:
+                    if batch < tier_batch:
+                        logger.info(
+                            f"Automatic batch size {batch} (the {tier_batch} this card's size "
+                            f"suggests is estimated above the {free_gib:.1f} GB that is free)."
+                        )
+                    return batch
+        except Exception as exc:  # noqa: BLE001 - advisory; keep the tier's batch
+            logger.debug("auto batch estimate failed: %r", exc)
+            return tier_batch
+        logger.warning(
+            f"Even batch size 1 is estimated at about {need:.1f} GB and {free_gib:.1f} GB "
+            "of GPU memory is free. Training will start at batch 1 and may run out of memory."
+        )
+        return 1
 
     def _detect_batch_size(self) -> int:
         """Auto-detect optimal batch size based on available VRAM.

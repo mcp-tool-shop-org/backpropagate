@@ -50,8 +50,8 @@ The `Trainer` constructor accepts optional overrides for all key hyperparameters
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `model` | `Qwen/Qwen2.5-7B-Instruct` | HuggingFace model name or local path |
-| `lora_r` | 256 | LoRA rank (must be > 0). v1.3 quality preset; pass --lora-preset=fast for v1.2.x rank-16. |
-| `lora_alpha` | 512 | LoRA scaling factor (alpha = 2 * r convention; v1.3 quality preset. Pass `--lora-preset=fast` for the v1.2.x alpha=32). |
+| `lora_r` | `None` (the preset's rank) | LoRA rank (must be > 0). `None` takes it from `lora_preset`: 256, 64 or 16. |
+| `lora_alpha` | `None` (the preset's alpha) | LoRA scaling factor. `None` takes it from `lora_preset`: 512, 128 or 32 (alpha = 2 x rank). |
 | `lora_dropout` | 0.05 | LoRA dropout rate |
 | `learning_rate` | 2e-4 | Learning rate |
 | `batch_size` | `"auto"` | Per-device batch size (auto-detects from VRAM) |
@@ -66,7 +66,7 @@ The `Trainer` constructor accepts optional overrides for all key hyperparameters
 | `packing` | `True` | v1.3 BACKEND-1 — sample packing (combine short sequences into single batches). Default ON gives 1.7-3× throughput on variable-length conversational datasets. Set `False` if you hit packing-incompatible behavior. |
 | `init_lora_weights` | `"default"` | v1.3 BACKEND-1 — one of `"default"` / `"pissa"` / `"loftq"`. PiSSA + LoftQ recover quality lost during QLoRA quantization at zero runtime cost. |
 | `optim` | `None` (auto) | v1.3 BACKEND-1 — optimizer string. `None` auto-picks `"paged_adamw_8bit"` on consumer GPUs (<24GB VRAM, per [arXiv:2509.12229](https://arxiv.org/abs/2509.12229) RTX 4060 study), `"adamw_torch_fused"` otherwise. Override with `"adamw_torch"` / `"paged_adamw_8bit"` / `"adamw_8bit"` etc. |
-| `lora_preset` | `"quality"` | v1.3 BACKEND-1 — one of `"quality"` (rank 256 + all-linear + 10× LR, default) or `"fast"` (rank 16 + q+v + 1× LR, v1.2.x footprint). Per [Biderman 2024](https://arxiv.org/abs/2405.09673), `"quality"` matches full fine-tuning on most post-training tasks. |
+| `lora_preset` | `None` (auto) | One of `"auto"`, `"quality"`, `"balanced"`, `"fast"`. The LoRA shape. `quality` = rank 256, alpha 512, every linear layer. `balanced` = rank 64, alpha 128, every linear layer (a 7B model on a 16 GB card: about 11 GB at batch 1). `fast` = rank 16, alpha 32, `q_proj` and `v_proj` only. `auto` uses the largest of the three whose estimate fits within 85% of the GPU memory that is free, and says so in the log when it is not `quality`. Giving `lora_r`, `lora_alpha` or `target_modules` turns the automatic choice off. Per [Biderman 2024](https://arxiv.org/abs/2405.09673), rank 256 on every linear layer matches full fine-tuning on most post-training tasks. |
 | `mode` | `"lora"` | **v1.4** — one of `"lora"` (the default — low-rank adapter) or `"full"` (full fine-tuning — every weight updated). `"full"` is supported only for models up to 4B parameters (genuine ~3B presets fit a 16GB card; the 3.8–4B class needs 24GB+); models >4B raise `FullFinetuneModelTooLargeError` (`RUNTIME_FULL_FT_MODEL_TOO_LARGE`). See [full fine-tuning](/backpropagate/handbook/full-fine-tuning/) for the LoRA-vs-full quality math + the recovery decision tree. |
 
 ### `train_on_responses` on Windows

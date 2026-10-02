@@ -1184,7 +1184,7 @@ def cmd_train(args: argparse.Namespace) -> int:
             # --no-packing is the opt-out; default = packing ON.
             "packing": not bool(getattr(args, "no_packing", False)),
             "init_lora_weights": getattr(args, "init_lora_weights", "default"),
-            "lora_preset": getattr(args, "lora_preset", "quality"),
+            "lora_preset": getattr(args, "lora_preset", "auto"),
             "optim": getattr(args, "optim", "auto"),
             # BRIDGE Wave 6b cross-domain (v1.4): --mode threads to
             # Trainer(mode=...). The introspection filter below drops the
@@ -1650,7 +1650,7 @@ def _cmd_multi_run_body(args: argparse.Namespace) -> int:
             "use_dora": bool(getattr(args, "use_dora", False)),
             "packing": not bool(getattr(args, "no_packing", False)),
             "init_lora_weights": getattr(args, "init_lora_weights", "default"),
-            "lora_preset": getattr(args, "lora_preset", "quality"),
+            "lora_preset": getattr(args, "lora_preset", "auto"),
             "optim": getattr(args, "optim", "auto"),
             # BRIDGE Wave 6b cross-domain (v1.4): --mode threads to
             # MultiRunConfig OR MultiRunTrainer (whichever the installed
@@ -8215,8 +8215,12 @@ Tips:
     train_parser.add_argument(
         "--lora-r",
         type=_positive_int,
-        default=256,
-        help="LoRA rank (default: 256 in v1.3 'quality' preset; pass --lora-preset=fast for v1.2.x rank-16 footprint). Must be > 0.",
+        default=None,
+        help=(
+            "LoRA rank. Default: the rank of the LoRA preset (see --lora-preset; "
+            "256 for quality, 64 for balanced, 16 for fast). Setting it turns "
+            "the automatic preset choice off. Must be > 0."
+        ),
     )
     # ui-v2 P3: per-run knobs the web form passes (alpha, dropout, target
     # modules, 16-bit base, tracker run name, checkpointing, temperature stop).
@@ -8257,13 +8261,15 @@ Tips:
     )
     train_parser.add_argument(
         "--lora-preset",
-        choices=["quality", "fast"],
-        default="quality",
+        choices=["auto", "quality", "balanced", "fast"],
+        default="auto",
         help=(
-            "LoRA configuration preset. 'quality' = rank 256 + all-linear "
-            "+ 10x LR (new v1.3 default, matches full fine-tuning per "
-            "Biderman 2024). 'fast' = rank 16 + q+v + 1x LR (v1.2 "
-            "defaults; smaller memory footprint)."
+            "LoRA shape. 'quality' = rank 256, alpha 512, every linear layer. "
+            "'balanced' = rank 64, alpha 128, every linear layer (a 7B model on "
+            "a 16 GB card). 'fast' = rank 16, alpha 32, q and v only. 'auto' "
+            "(default) uses the largest of the three that is estimated to fit "
+            "the GPU memory that is free, unless --lora-r, --lora-alpha or "
+            "--target-modules is given."
         ),
     )
     train_parser.add_argument(
@@ -8677,13 +8683,15 @@ Tips:
     )
     multi_parser.add_argument(
         "--lora-preset",
-        choices=["quality", "fast"],
-        default="quality",
+        choices=["auto", "quality", "balanced", "fast"],
+        default="auto",
         help=(
-            "LoRA configuration preset. 'quality' = rank 256 + all-linear "
-            "+ 10x LR (new v1.3 default, matches full fine-tuning per "
-            "Biderman 2024). 'fast' = rank 16 + q+v + 1x LR (v1.2 "
-            "defaults; smaller memory footprint)."
+            "LoRA shape. 'quality' = rank 256, alpha 512, every linear layer. "
+            "'balanced' = rank 64, alpha 128, every linear layer (a 7B model on "
+            "a 16 GB card). 'fast' = rank 16, alpha 32, q and v only. 'auto' "
+            "(default) uses the largest of the three that is estimated to fit "
+            "the GPU memory that is free, unless --lora-r, --lora-alpha or "
+            "--target-modules is given."
         ),
     )
     multi_parser.add_argument(

@@ -178,6 +178,27 @@ def _no_leftover_hub_tokens():
 
 
 @pytest.fixture(autouse=True)
+def _no_card_aware_defaults(monkeypatch):
+    """Report no free-VRAM reading to the trainer for every test.
+
+    The trainer picks its default LoRA shape and automatic batch from the GPU
+    memory that is free (``trainer._free_vram_gib``). On a developer rig that
+    depends on what else is running; None gives the long-standing defaults
+    (rank 256, the card tier's batch) everywhere. Tests of the card-aware
+    behaviour set a value themselves.
+    """
+    import sys
+
+    module = sys.modules.get("backpropagate.trainer")
+    if module is None:
+        try:
+            import backpropagate.trainer as module  # noqa: PLC0415
+        except Exception:  # noqa: BLE001 - a test that never imports the trainer
+            return
+    monkeypatch.setattr(module, "_free_vram_gib", lambda: None, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _default_backend_to_cuda(request, monkeypatch):
     """Default the training backend to CUDA for the whole suite.
 

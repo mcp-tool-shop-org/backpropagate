@@ -289,10 +289,11 @@ class TestWave6bTrainSubcommandFlags:
                 "--init-lora-weights", "nonsense",
             ])
 
-    def test_train_lora_preset_default_is_quality(self, cli_parser):
-        """v1.3 default lora-preset is 'quality'."""
+    def test_train_lora_preset_default_is_auto(self, cli_parser):
+        """The default preset is 'auto': quality when it fits the GPU,
+        otherwise balanced, otherwise fast."""
         args = cli_parser.parse_args(["train", "-d", "data.jsonl"])
-        assert args.lora_preset == "quality"
+        assert args.lora_preset == "auto"
 
     def test_train_lora_preset_fast_for_back_compat(self, cli_parser):
         """`--lora-preset fast` selects the v1.2-compatible preset."""

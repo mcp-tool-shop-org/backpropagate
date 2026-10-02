@@ -46,7 +46,7 @@ backprop train --data my_data.jsonl --model Qwen/Qwen2.5-7B-Instruct --steps 100
 | `--samples` | unset | Maximum samples to use from the dataset (must be > 0). |
 | `--batch-size` | `auto` | Per-device batch size. `auto` queries GPU VRAM. |
 | `--lr` | `2e-4` | Learning rate (must be > 0). |
-| `--lora-r` | `256` | LoRA rank (must be > 0). v1.3 default; pass `--lora-preset=fast` for the v1.2.x rank-16 footprint. |
+| `--lora-r` | unset (the preset's rank) | LoRA rank (must be > 0). Unset, the rank comes from `--lora-preset`: 256, 64 or 16. Setting it turns the automatic preset choice off. |
 | `--lora-alpha` | unset (settings `512`) | **1.8.2** — LoRA alpha (scaling); must be > 0. Default is `BACKPROPAGATE_LORA__LORA_ALPHA`. `--mode lora` only. |
 | `--lora-dropout` | unset (settings `0.05`) | **1.8.2** — LoRA dropout, `0 <= x < 1`. Default is `BACKPROPAGATE_LORA__LORA_DROPOUT`. `--mode lora` only. |
 | `--target-modules` | unset (settings `all-linear`) | **1.8.2** — LoRA target modules for this run only: comma-separated module names (`q_proj,v_proj`) or the literal `all-linear`. Overrides the settings value (and `--lora-preset`'s modules) in both the Unsloth and the transformers loader. Empty entries and names that are not identifiers (dots allowed) exit `1` with `[INPUT_VALIDATION_FAILED]`. `--mode lora` only. |
@@ -57,7 +57,7 @@ backprop train --data my_data.jsonl --model Qwen/Qwen2.5-7B-Instruct --steps 100
 | `--output`, `-o` | `./output` | Output directory. |
 | `--no-unsloth` | off | Disable Unsloth even if available. |
 | `--report-to` | `auto` | **1.8.2** — experiment tracker: `auto` / `none` / `wandb` / `tensorboard` / `mlflow`. `auto` uses every tracker that is installed, and W&B only when it is logged in (`wandb login` or `WANDB_API_KEY`) or `WANDB_MODE` is `offline` / `disabled`. `none` turns tracking off. Naming `wandb` when it is installed but not logged in stops the run with `CONFIG_INVALID_SETTING` before the model loads. |
-| `--lora-preset` | `quality` | One of `quality` / `fast`. `quality` = rank 256 + all-linear + 10× LR (v1.3 default, matches full fine-tuning per Biderman 2024). `fast` = rank 16 + q+v + 1× LR (v1.2.x footprint). |
+| `--lora-preset` | `auto` | One of `auto` / `quality` / `balanced` / `fast`. The LoRA shape. `quality` = rank 256, alpha 512, every linear layer. `balanced` = rank 64, alpha 128, every linear layer (a 7B model on a 16 GB card: about 11 GB at batch 1). `fast` = rank 16, alpha 32, `q_proj` and `v_proj` only. `auto` uses the largest of the three whose estimate fits within 85% of the GPU memory that is free, and says so in the log when it is not `quality`. Giving `--lora-r`, `--lora-alpha` or `--target-modules` turns the automatic choice off. The preset does not change the learning rate. Before 1.8.2 this flag was accepted and had no effect. |
 | `--use-dora` | off | Enable DoRA (Weight-Decomposed Low-Rank Adaptation). Rank-8 DoRA ≈ rank-32 LoRA quality, zero inference overhead. Requires `peft>=0.10`. |
 | `--no-packing` | (packing ON by default) | Disable sample packing. Default ON gives 1.7-3× throughput; disable only if you hit packing-incompatible behavior. |
 | `--init-lora-weights` | `default` | One of `default` / `pissa` / `loftq`. PiSSA + LoftQ recover quality lost during QLoRA quantization at zero runtime cost. |
@@ -102,7 +102,7 @@ backprop multi-run --data my_data.jsonl --runs 5 --steps 100
 | `--merge-mode` | `slao` | One of `slao` / `simple`. |
 | `--lr` | unset (`2e-4`) | **1.8.2** — starting learning rate (must be > 0). The sweep still decays it across runs, ending at a quarter of the start (the default `2e-4` → `5e-5` shape). |
 | `--batch-size` | `auto` | **1.8.2** — per-device batch size: `auto` or a positive integer. Applies to every run. |
-| `--lora-r` | unset (settings `256`) | **1.8.2** — LoRA rank (must be > 0). Applies to every run. |
+| `--lora-r` | unset (the preset's rank) | **1.8.2** — LoRA rank (must be > 0). Applies to every run. |
 | `--lora-alpha` | unset (settings `512`) | **1.8.2** — same as `backprop train`. |
 | `--lora-dropout` | unset (settings `0.05`) | **1.8.2** — same as `backprop train`. |
 | `--target-modules` | unset (settings `all-linear`) | **1.8.2** — same as `backprop train`. |
@@ -111,7 +111,7 @@ backprop multi-run --data my_data.jsonl --runs 5 --steps 100
 | `--no-gradient-checkpointing` | off | **1.8.2** — same as `backprop train`. |
 | `--gpu-max-temp` | unset | **1.8.2** — same as `backprop train`, but a trip saves the current run and ends the whole session (the runs already merged are kept). |
 | `--output`, `-o` | `./output` | Output directory. |
-| `--lora-preset` | `quality` | Same as `backprop train`. |
+| `--lora-preset` | `auto` | Same as `backprop train`. |
 | `--use-dora` | off | Same as `backprop train`. |
 | `--no-packing` | (packing ON by default) | Same as `backprop train`. |
 | `--init-lora-weights` | `default` | Same as `backprop train`. |

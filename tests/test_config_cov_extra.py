@@ -365,7 +365,7 @@ class TestPresetLookups:
         assert cfg.lookup_model_preset_by_id("nobody/nothing") is None
 
     def test_lora_and_training_preset_errors(self):
-        with pytest.raises(ValueError, match="Unknown LoRA preset 'turbo'. Available: fast, quality"):
+        with pytest.raises(ValueError, match="Unknown LoRA preset 'turbo'. Available: fast, balanced, quality"):
             cfg.get_lora_preset("turbo")
         with pytest.raises(ValueError, match="Unknown preset 'warp'. Available: "):
             cfg.get_preset("warp")

@@ -222,6 +222,24 @@ def _positive_int(value: str) -> int:
     return n
 
 
+REPORT_TO_CHOICES = ("auto", "none", "wandb", "tensorboard", "mlflow")
+
+
+def _add_report_to_arg(parser: argparse.ArgumentParser) -> None:
+    """Add ``--report-to`` (experiment tracking) to a training subparser."""
+    parser.add_argument(
+        "--report-to",
+        choices=REPORT_TO_CHOICES,
+        default="auto",
+        help=(
+            "Experiment tracker (default: auto). auto uses every installed "
+            "tracker, and W&B only when it is logged in (`wandb login` or "
+            "WANDB_API_KEY) or WANDB_MODE is offline/disabled. none turns "
+            "tracking off. Naming wandb without credentials is an error."
+        ),
+    )
+
+
 def _auto_or_positive_int(value: str) -> "int | str":
     """argparse type for the ``train --batch-size`` flag.
 
@@ -848,6 +866,10 @@ def cmd_train(args: argparse.Namespace) -> int:
             # raises CONFIG_INVALID_SETTING from the Trainer guard. Dropped
             # silently on a pre-T3.1 Trainer build.
             "backend": getattr(args, "backend", "auto"),
+            # --report-to threads to Trainer(report_to=...). "auto" (the
+            # default) is the Trainer's own default, so a run without the flag
+            # is unchanged; "none" is the CLI's only way to turn tracking off.
+            "report_to": getattr(args, "report_to", "auto"),
         }
         # v1.6 C4: the SimPO/KTO hyperparameter flags default to None on the
         # argparse side ("operator did not set it"). Drop the unset ones so the
@@ -1184,6 +1206,9 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
             "eval_gate": bool(getattr(args, "eval_gate", False)),
             "eval_max_regression": getattr(args, "eval_max_regression", 0.0),
             "eval_heldout_path": getattr(args, "eval_heldout", None),
+            # --report-to is a MultiRunTrainer kwarg (forwarded to the inner
+            # Trainer), so the inspect filter routes it to the trainer side.
+            "report_to": getattr(args, "report_to", "auto"),
         }
         # v1.6 C4: drop the SimPO/KTO hyperparameter keys when unset (None) so
         # the config field defaults govern instead of clobbering them with None
@@ -7817,6 +7842,7 @@ Tips:
         action="store_true",
         help="Disable Unsloth even if available",
     )
+    _add_report_to_arg(train_parser)
     # F-002: resume hint — reuses the same run_id and updates the on-disk
     # history record in place. Accepts a partial run_id prefix.
     train_parser.add_argument(
@@ -8113,6 +8139,7 @@ Tips:
         default="./output",
         help="Output directory (default: ./output)",
     )
+    _add_report_to_arg(multi_parser)
     # F-002: resume hint — when set, picks up the latest checkpoint for the
     # matching run_id (or partial prefix) and continues from the next run.
     multi_parser.add_argument(

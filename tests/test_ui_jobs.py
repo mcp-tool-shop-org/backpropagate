@@ -207,8 +207,11 @@ def test_validation_rejects_bad_specs(tmp_path):
         m.start(_spec(tmp_path, steps=0))
     with pytest.raises(JobValidationError):
         m.start(_spec(tmp_path, lr=0.0))
+    # ui-v2 P3: full fine-tuning is allowed from the UI, for SFT only.
     with pytest.raises(JobValidationError):
-        m.start(_spec(tmp_path, mode="full"))  # P3
+        m.start(_spec(tmp_path, mode="full", method="orpo"))
+    with pytest.raises(JobValidationError):
+        m.start(_spec(tmp_path, mode="bogus"))
     with pytest.raises(NotImplementedError):
         m.start(_spec(tmp_path, kind="export_gguf"))
 

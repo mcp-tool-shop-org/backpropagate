@@ -1199,7 +1199,10 @@ class TrainState(rx.State):
                 {
                     "t": _ts_now(),
                     "level": "ok",
-                    "msg": f"Checkpoint saved: {row.get('path', '')}",
+                    # The folder name only: a full path wrapped to ~8 lines
+                    # in the 296px rail. "Saved to:" shows the full path.
+                    "msg": "Checkpoint saved: "
+                    + (Path(str(row.get("path") or "")).name or str(row.get("path") or "")),
                 },
             ]
         elif kind == "error":
@@ -1231,8 +1234,13 @@ class TrainState(rx.State):
         self.heartbeat_label = (
             f"last step {ago} s ago" if self.job_phase == "training" else ""
         )
+        # Warm-up per the handoff: about 20 steps or 5% of the run, whichever
+        # comes first, and at least two step-time samples for the EMA (steps
+        # are logged every 10, so a 5-sample floor hid the ETA until step 50).
+        warm_step = min(20, max(1, int(self.job_total_steps * 0.05)))
         if (
-            self._step_samples >= 5
+            self._step_samples >= 2
+            and self.current_step >= warm_step
             and self.job_total_steps > self.current_step > 0
             and self._step_time_ms_ema > 0
         ):

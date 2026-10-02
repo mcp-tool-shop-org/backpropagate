@@ -77,6 +77,7 @@ class JobEventWriter:
         self.path = self.run_dir / EVENTS_FILENAME
         self.path.touch(exist_ok=True)
         self._lock = threading.Lock()
+        self._last_phase: str | None = None
 
     @staticmethod
     def _ts() -> str:
@@ -96,6 +97,13 @@ class JobEventWriter:
             logger.warning("JobEventWriter.write failed: %r", exc)
 
     def phase(self, phase: str, **extra: Any) -> None:
+        """Record a phase change. Re-entering the current phase is a no-op:
+        a cooperative stop enters "saving" in the callback (checkpoint) and
+        the CLI enters it again for the final save, and the UI should show
+        one phase change, not two."""
+        if phase == self._last_phase and not extra:
+            return
+        self._last_phase = phase
         self.write({"kind": "phase", "phase": phase, **extra})
 
     def checkpoint(self, path: str | Path) -> None:

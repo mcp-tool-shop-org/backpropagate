@@ -158,3 +158,19 @@ def test_stop_signal_single_saving_phase_and_last_step(tmp_path):
     )
     assert len(list(savings)) == 1
     assert cb.last_step == 3
+
+
+def test_stop_then_final_save_records_one_saving_phase(tmp_path):
+    """A cooperative stop enters "saving" in the callback, then cmd_train
+    enters it again for the final save through the same writer: one row."""
+    (tmp_path / "control.json").write_text('{"action": "stop_save"}')
+    writer = JobEventWriter(tmp_path)
+    cb = UiFileEventCallback(tmp_path, writer=writer)
+    args, control = _Args(), _Control()
+    cb.on_train_begin(args, _State(), control)
+    cb.on_step_end(args, _State(step=1), control)
+    writer.phase("saving")  # cmd_train, before trainer.save()
+    writer.phase("done")
+    phases = [r["phase"] for r in _rows(tmp_path) if r.get("kind") == "phase"]
+    assert phases.count("saving") == 1
+    assert phases[-1] == "done"

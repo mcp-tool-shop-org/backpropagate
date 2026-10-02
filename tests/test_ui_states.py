@@ -3049,6 +3049,25 @@ class TestTrainStateLiveLabels:
         state._tick_live_labels()
         assert state.eta_label == ""
 
+    def test_eta_shows_after_twenty_steps_with_ten_step_logging(self):
+        """Steps are logged every 10, so step 30 of 420 has 3 samples. The
+        warm-up is ~20 steps or 5%, so the ETA must show by now (a 5-sample
+        floor hid it until step 50)."""
+        from backpropagate.ui_state import TrainState
+
+        state = TrainState()
+        state.run_state = "active"
+        state.job_phase = "training"
+        state.job_total_steps = 420
+        state.current_step = 30
+        state._step_samples = 3
+        state._step_time_ms_ema = 450.0
+        import time as _time
+
+        state._last_step_epoch = _time.time()
+        state._tick_live_labels()
+        assert state.eta_label.startswith("about ")
+
 
 def test_merge_job_history_rows_merges_jobs_tree(tmp_path):
     """Fix #6: UI runs live under jobs/<run>/output — merged into Runs."""

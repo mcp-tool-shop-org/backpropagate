@@ -186,6 +186,9 @@ except ImportError:
 # unset it the way they can unset an environment variable. A pip install
 # has no marker, and the opt-in keeps working there.
 STORE_EDITION_MARKER_NAME = "backpropagate-store-edition"
+# The path module itself, taken at import: some tests swap ``config.os`` for
+# a stub without ``path``; the marker check must keep working under them.
+_OS_PATH = os.path
 
 
 def is_store_edition() -> bool:
@@ -197,13 +200,15 @@ def is_store_edition() -> bool:
     what still wins if the caller sets that variable again, or sets it
     from a ``.env`` file, after startup.
     """
+    # os.path, not pathlib: tests patch ``os.name`` to the other platform
+    # around CLI calls, and pathlib refuses to build a path for a platform
+    # it is not running on. os.path is bound at import and does not care.
     try:
-        marker = Path(sys.executable).resolve().parent / STORE_EDITION_MARKER_NAME
-    except OSError:
-        return False
-    try:
-        return marker.is_file()
-    except OSError:
+        marker = _OS_PATH.join(
+            _OS_PATH.dirname(_OS_PATH.realpath(sys.executable)), STORE_EDITION_MARKER_NAME
+        )
+        return _OS_PATH.isfile(marker)
+    except (OSError, TypeError, ValueError):
         return False
 
 

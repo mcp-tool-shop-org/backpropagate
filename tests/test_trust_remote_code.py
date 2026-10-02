@@ -416,27 +416,27 @@ class TestStoreEditionIgnoresOptIn:
         assert "Store edition" not in capsys.readouterr().out
 
     def test_resolve_error_is_not_the_store_edition(self, monkeypatch):
-        real_resolve = Path.resolve
+        def boom(path):
+            raise OSError("resolve failed")
 
-        def boom(self, *args, **kwargs):
-            if self == Path(sys.executable):
-                raise OSError("resolve failed")
-            return real_resolve(self, *args, **kwargs)
-
-        monkeypatch.setattr(Path, "resolve", boom)
+        monkeypatch.setattr(real_cfg.os.path, "realpath", boom)
         assert real_cfg.is_store_edition() is False
 
     def test_marker_stat_error_is_not_the_store_edition(self, monkeypatch, tmp_path):
         _place_store_marker(tmp_path, monkeypatch)
-        real_is_file = Path.is_file
 
-        def boom(self, *args, **kwargs):
-            if self.name == real_cfg.STORE_EDITION_MARKER_NAME:
-                raise OSError("stat failed")
-            return real_is_file(self, *args, **kwargs)
+        def boom(path):
+            raise OSError("stat failed")
 
-        monkeypatch.setattr(Path, "is_file", boom)
+        monkeypatch.setattr(real_cfg.os.path, "isfile", boom)
         assert real_cfg.is_store_edition() is False
+
+    def test_the_check_survives_a_patched_platform_name(self, monkeypatch, tmp_path):
+        # tests/test_cli*.py patch os.name to the other platform around CLI
+        # calls; the marker check must not build a Path for that platform.
+        _place_store_marker(tmp_path, monkeypatch)
+        monkeypatch.setattr(real_cfg.os, "name", "posix" if real_cfg.os.name == "nt" else "nt")
+        assert real_cfg.is_store_edition() is True
 
 
 class TestPipInstallStillOptsIn:

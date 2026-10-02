@@ -99,7 +99,7 @@ def _filter_bar() -> rx.Component:
         ),
         direction="row",
         align="end",
-        gap="3",
+        gap="var(--space-3)",
         width="100%",
     )
 
@@ -111,10 +111,10 @@ def _table_header() -> rx.Component:
         rx.text("Last modified", style=_eyebrow_style()),
         rx.text("", style=_eyebrow_style()),  # action column
         columns="1.8fr 100px 200px 100px",
-        gap="3",
+        gap="var(--space-3)",
         width="100%",
-        padding_x="3",
-        padding_y="2",
+        padding_x="var(--space-3)",
+        padding_y="var(--space-2)",
         style={"border_bottom": "1px solid var(--bp-border)"},
     )
 
@@ -194,17 +194,17 @@ def _model_row(row) -> rx.Component:
                             on_click=lambda: ModelsState.delete_model(row["dir_name"]),
                         ),
                     ),
-                    gap="3",
+                    gap="var(--space-3)",
                     justify="end",
-                    margin_top="3",
+                    margin_top="var(--space-3)",
                 ),
             ),
         ),
         columns="1.8fr 100px 200px 100px",
-        gap="3",
+        gap="var(--space-3)",
         width="100%",
-        padding_x="3",
-        padding_y="2",
+        padding_x="var(--space-3)",
+        padding_y="var(--space-2)",
         align="center",
         style={
             "border_bottom": "1px solid var(--bp-border)",
@@ -228,8 +228,8 @@ def _empty_state() -> rx.Component:
             style={"color": "var(--bp-muted)"},
         ),
         direction="column",
-        gap="2",
-        padding="6",
+        gap="var(--space-2)",
+        padding="var(--space-6)",
         align="center",
         width="100%",
     )
@@ -262,17 +262,26 @@ def models_page() -> rx.Component:
             BpLeftNav(active="models"),
             rx.scroll_area(
                 rx.flex(
-                    rx.heading(
-                        "Local models",
-                        size="6",
-                        style={"color": "var(--bp-text)", "font_weight": "500"},
-                    ),
-                    rx.text(
-                        "Hugging Face cache inventory. Each entry is a "
-                        "snapshot directory under "
-                        "~/.cache/huggingface/hub/; delete to free disk.",
-                        size="2",
-                        style={"color": "var(--bp-muted)"},
+                    rx.flex(
+                        rx.heading(
+                            "Local models",
+                            size="7",
+                            style={
+                                "color": "var(--bp-text)",
+                                "font_weight": "600",
+                                "letter_spacing": "-0.02em",
+                            },
+                        ),
+                        rx.text(
+                            "Hugging Face cache inventory. Each entry is a "
+                            "snapshot directory under "
+                            "~/.cache/huggingface/hub/; delete to free disk.",
+                            size="2",
+                            style={"color": "var(--bp-muted)"},
+                        ),
+                        direction="column",
+                        gap="var(--space-2)",
+                        width="100%",
                     ),
                     _filter_bar(),
                     rx.cond(
@@ -295,9 +304,9 @@ def models_page() -> rx.Component:
                                     style={"color": "var(--bp-muted)"},
                                 ),
                                 direction="row",
-                                gap="2",
+                                gap="var(--space-2)",
                                 align="center",
-                                padding="4",
+                                padding="var(--space-4)",
                             ),
                             role="status",
                             aria_live="polite",
@@ -341,9 +350,9 @@ def models_page() -> rx.Component:
                         rx.fragment(),
                     ),
                     direction="column",
-                    gap="4",
-                    padding="6",
-                    max_width="980px",
+                    gap="var(--space-6)",
+                    padding="var(--space-7)",
+                    max_width="1320px",
                     width="100%",
                     on_mount=ModelsState.load_models,
                 ),

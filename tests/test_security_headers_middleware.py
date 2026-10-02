@@ -73,7 +73,7 @@ async def _http_receive():
     return {"type": "http.request", "body": b"", "more_body": False}
 
 
-async def middleware_send(app, scope: dict, recorder: "_Recorder") -> None:
+async def middleware_send(app, scope: dict, recorder: _Recorder) -> None:
     """Drive an ASGI ``app`` with ``scope`` + an HTTP receive, recording sends.
 
     Used by the UI-A-002 production-layering tests: composes the real auth

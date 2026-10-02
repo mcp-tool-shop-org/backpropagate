@@ -25,6 +25,9 @@ _STATE_COLOR = {
     "active":  "var(--bp-teal)",
     "paused":  "var(--bp-amber)",
     "done":    "var(--bp-seafoam)",
+    # stopped = a graceful early end (checkpoint saved) — amber, not the
+    # seafoam of a full completion nor the peach of a failure.
+    "stopped": "var(--bp-amber)",
     "error":   "var(--bp-peach)",
 }
 
@@ -35,6 +38,7 @@ _STATE_ANIM = {
     "active":  "bp-heartbeat-2400",
     "paused":  "bp-pulse-1600",
     "done":    "",
+    "stopped": "",
     "error":   "",
 }
 
@@ -98,15 +102,16 @@ def BpStatusPill(state="idle", label: str = "Idle", detail: str = "") -> rx.Comp
                     rx.fragment(),
                 ),
                 direction="column",
-                gap="1",
+                gap="var(--space-1)",
             ),
-            gap="2",
+            gap="var(--space-3)",
             align="start",
-            padding="2",
+            padding="var(--space-4)",
+            width="100%",
             style={
                 "background": _tint(dot_color),
                 "border": f"1px solid {_border(dot_color)}",
-                "border_radius": "var(--bp-r-2)",
+                "border_radius": "var(--bp-r-lg)",
             },
         )
 
@@ -120,6 +125,7 @@ def BpStatusPill(state="idle", label: str = "Idle", detail: str = "") -> rx.Comp
         ("active",  _pill_variant(state="active",  label=label, detail=detail)),
         ("paused",  _pill_variant(state="paused",  label=label, detail=detail)),
         ("done",    _pill_variant(state="done",    label=label, detail=detail)),
+        ("stopped", _pill_variant(state="stopped", label=label, detail=detail)),
         ("error",   _pill_variant(state="error",   label=label, detail=detail)),
         _pill_variant(state="idle", label=label, detail=detail),
     )
@@ -150,14 +156,15 @@ def _pill_variant(state: str, label, detail) -> rx.Component:
                 },
             ),
             direction="column",
-            gap="1",
+            gap="var(--space-1)",
         ),
-        gap="2",
+        gap="var(--space-3)",
         align="start",
-        padding="2",
+        padding="var(--space-4)",
+        width="100%",
         style={
             "background": _tint(dot_color),
             "border": f"1px solid {_border(dot_color)}",
-            "border_radius": "var(--bp-r-2)",
+            "border_radius": "var(--bp-r-lg)",
         },
     )

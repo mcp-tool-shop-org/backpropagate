@@ -33,7 +33,7 @@ from typing import Literal
 import reflex as rx
 
 # Shared literal types — referenced across multiple State classes.
-RunState = Literal["idle", "loading", "active", "paused", "done", "error"]
+RunState = Literal["idle", "loading", "active", "paused", "done", "stopped", "error"]
 Theme = Literal["dark", "light"]
 ActiveSurface = Literal["train", "multi-run", "export", "dataset"]
 ExportFormat = Literal["lora", "merged", "gguf"]
@@ -75,6 +75,79 @@ _CLI_NOTICE_TEMPLATE = (
     "run `{cmd}` from the shell for now."
 )
 _CLI_NOTICE_TRAIN = _CLI_NOTICE_TEMPLATE.format(cmd="backprop train")
+
+
+def _ts_now() -> str:
+    """HH:MM:SS timestamp for event-log rows (ui-v2 event feed)."""
+    import datetime as _dt
+
+    return _dt.datetime.now(tz=_dt.timezone.utc).strftime("%H:%M:%S")
+
+
+def _merge_job_history_rows(
+    rows: list[dict], history_dir: object, *, status: str | None, limit: int
+) -> list[dict]:
+    """Merge per-job histories into the root run-history rows.
+
+    UI-spawned training (JobManager) writes its run history to
+    ``<ui-output>/jobs/<run_id>/output/run_history.json`` — a tree the root
+    RunHistoryManager never reads, so UI-driven runs were invisible on the
+    Runs page even after two successful trainings (ui-v2 P1 fix round).
+    De-dupes by run_id, re-applies the status filter to the job entries,
+    sorts by ``started_at`` descending, and re-trims to ``limit``.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    def _sort_trim(all_rows: list[dict]) -> list[dict]:
+        all_rows.sort(key=lambda r: str(r.get("started_at") or ""), reverse=True)
+        return all_rows[:limit]
+
+    seen = {str(r.get("run_id") or "") for r in rows}
+    merged = list(rows)
+    jobs_root = _Path(str(history_dir)) / "jobs"
+    if not jobs_root.is_dir():
+        return _sort_trim(merged)
+    for hist in sorted(jobs_root.glob("*/output/run_history.json")):
+        try:
+            data = _json.loads(hist.read_text(encoding="utf-8"))
+        except (OSError, _json.JSONDecodeError):
+            continue
+        entries = data.get("runs") if isinstance(data, dict) else data
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            rid = str(entry.get("run_id") or "")
+            if rid and rid in seen:
+                continue
+            if status and str(entry.get("status") or "") != status:
+                continue
+            if rid:
+                seen.add(rid)
+            merged.append(entry)
+    return _sort_trim(merged)
+
+
+def _fmt_eta_range(eta_s: float) -> tuple[str, str]:
+    """Format an ETA as a low/high pair (ui-v2 requirement 10).
+
+    ETAs on live training are approximate — step times vary with compile,
+    eval, and checkpoint saves — so the UI quotes a range (EMA -20% …
+    EMA +30%) instead of a fake-exact countdown.
+    """
+
+    def fmt(seconds: float) -> str:
+        if seconds < 90:
+            return f"{int(max(5, round(seconds / 5.0) * 5))} s"
+        if seconds < 5400:
+            return f"{int(round(seconds / 60.0))} min"
+        return f"{seconds / 3600.0:.1f} h"
+
+    return fmt(max(1.0, eta_s * 0.8)), fmt(max(2.0, eta_s * 1.3))
+
+
 _CLI_NOTICE_MULTI_RUN = _CLI_NOTICE_TEMPLATE.format(cmd="backprop multi-run")
 _CLI_NOTICE_EXPORT = _CLI_NOTICE_TEMPLATE.format(cmd="backprop export")
 
@@ -519,16 +592,28 @@ class TrainState(rx.State):
     current_step: int = 0
     current_loss: float = 0.0
     loss_history: list[float] = []
+    # ui-v2 P1 fix round: parallel series for the chart + smoothed readout.
+    # ``step_history[i]`` is the trainer's global_step for loss_history[i]
+    # (real numbers, not enumerate index, so the x-axis tracks training even
+    # when logging_steps > 1); ``ema_history`` holds the debiased EMA value
+    # (None-safe: recharts skips null points with connectNulls off).
+    ema_history: list[float] = []
+    step_history: list[int] = []
+    # True while a stop request is in flight (control.json written, child
+    # still saving/exiting). Disables the Stop button against double-clicks.
+    stop_requested: bool = False
+    # Requirement 10: "last step N s ago" heartbeat + ETA range label.
+    # Poller-owned (1 Hz during active runs); frozen when the run ends.
+    heartbeat_label: str = ""
+    eta_label: str = ""
     gpu_temp: float = 0.0
     vram_used_gb: float = 0.0
     vram_total_gb: float = 0.0
 
-    # CLIUI-B-001 (Stage C UI honesty floor): operator-facing notice surfaced
-    # when the Start button is clicked. UI-driven training is not wired yet
-    # (the real background-task hookup is CLIUI-B-002, deferred to the feature
-    # pass), so instead of faking a loading spinner the handler points the
-    # operator at the shell command that DOES work today. Empty until clicked.
-    cli_notice: str = ""
+    # CLIUI-B-001's ``cli_notice`` pointer field was removed in the ui-v2 P1
+    # fix round: UI-driven training is real now, so the "use the shell"
+    # notice can never fire on this surface. MultiRunState/ExportState keep
+    # theirs until P2 wires those pages into the JobManager.
 
     # Event log — each entry is a dict with keys: t (timestamp str),
     # level (one of info/ok/warn/err/tx/hf), msg (str).
@@ -538,13 +623,77 @@ class TrainState(rx.State):
 
     @rx.var
     def loss_chart_data(self) -> list[dict]:
-        """Shape ``loss_history`` for ``rx.recharts.line_chart`` consumption.
+        """Shape the step/loss/EMA series for ``rx.recharts.line_chart``.
 
-        Returns ``[{"step": i, "loss": v}, ...]`` — the dict shape recharts
-        needs. Computed-Var so the chart re-renders without an explicit
-        event handler when the trainer pushes a new step into the history.
+        Returns ``[{"step": s, "loss": v, "ema": e}, ...]`` — real trainer
+        step numbers on x (not index), raw loss + debiased EMA on y so the
+        chart draws the design-digest "raw faint + smoothed bold" pairing.
         """
-        return [{"step": i, "loss": v} for i, v in enumerate(self.loss_history)]
+        out: list[dict] = []
+        for i, loss in enumerate(self.loss_history):
+            step = self.step_history[i] if i < len(self.step_history) else i
+            row: dict = {"step": step, "loss": round(float(loss), 5)}
+            if i < len(self.ema_history):
+                row["ema"] = round(float(self.ema_history[i]), 5)
+            out.append(row)
+        return out
+
+    @rx.var
+    def loss_label(self) -> str:
+        """Current loss formatted for display (3-4 decimals, not 17)."""
+        if not self.loss_history:
+            return ""
+        return f"{self.current_loss:.4f}"
+
+    @rx.var
+    def ema_loss_label(self) -> str:
+        """Smoothed loss (debiased EMA), the headline number on the chart card."""
+        if not self.ema_history:
+            return ""
+        return f"{self.ema_history[-1]:.4f}"
+
+    @rx.var
+    def form_disabled(self) -> bool:
+        """True while a run is active — config fields lock during training."""
+        return self.run_state == "active"
+
+    @rx.var
+    def vram_fill_pct(self) -> str:
+        """Live width string for the VRAM bar (e.g. ``"29.7%"``)."""
+        if not self.vram_total_gb or self.vram_total_gb <= 0:
+            return "0.0%"
+        ratio = max(0.0, min(1.0, self.vram_used_gb / self.vram_total_gb))
+        return f"{ratio * 100:.1f}%"
+
+    @rx.var
+    def vram_label(self) -> str:
+        """``"9.5 / 32.0 GB"`` for the VRAM bar label."""
+        if not self.vram_total_gb or self.vram_total_gb <= 0:
+            return "VRAM unknown"
+        return f"{self.vram_used_gb:.1f} / {self.vram_total_gb:.1f} GB"
+
+    @rx.var
+    def gpu_temp_label(self) -> str:
+        """``"61°C"`` — empty when no reading exists (honest idle)."""
+        if not self.gpu_temp or self.gpu_temp <= 0:
+            return ""
+        return f"{self.gpu_temp:.0f}°C"
+
+    @rx.var
+    def gpu_fill_pct(self) -> str:
+        """``"64%"`` arc fill for the temp ring (clamped to 95°C right edge)."""
+        if not self.gpu_temp or self.gpu_temp <= 0:
+            return "0%"
+        ratio = max(0.0, min(1.0, self.gpu_temp / 95.0))
+        return f"{ratio * 100:.0f}%"
+
+    @rx.var
+    def step_progress_pct(self) -> str:
+        """Banner progress width: current_step / job_total_steps."""
+        if not self.job_total_steps or self.job_total_steps <= 0:
+            return "0.0%"
+        ratio = max(0.0, min(1.0, self.current_step / self.job_total_steps))
+        return f"{ratio * 100:.1f}%"
 
     @rx.var
     def run_complete(self) -> bool:
@@ -553,9 +702,11 @@ class TrainState(rx.State):
         FRONTEND-10 (post-run "next steps" panel) reads this Var to know when
         to surface the post-run affordances. ``error`` counts as complete for
         UI purposes — the operator still wants the "export what you have /
-        start another / view checkpoints" affordances after a failure.
+        start another / view checkpoints" affordances after a failure. A
+        cooperative stop (``stopped``) is complete too: the checkpoint was
+        saved, so the same affordances apply.
         """
-        return self.run_state in ("done", "error")
+        return self.run_state in ("done", "stopped", "error")
 
     # ---- Recovery-banner Vars (FRONTEND-A-004, v1.4 Wave 2) -----------------
     #
@@ -707,45 +858,463 @@ class TrainState(rx.State):
     def set_flash_attention(self, value: bool) -> None:
         self.flash_attention = bool(value)
 
+    # ---- Live-run plumbing (ui-v2 P1) -----------------------------------------
+    # Populated by the background poller from the job's events.jsonl. The job
+    # itself is a subprocess spawned by backpropagate.ui_jobs.JobManager —
+    # training NEVER runs in the UI server process.
+    job_id: str = ""
+    job_phase: str = ""
+    job_total_steps: int = 0
+    job_refusal: str = ""
+    job_error_code: str = ""
+    job_error_message: str = ""
+    job_error_hint: str = ""
+    job_output_path: str = ""
+    job_stalled: bool = False
+    gpu_name: str = ""
+    # ui-v2 P1 fix round: set ONLY when this page opened onto a run it did not
+    # start (adopted mid-flight). Drives the single "Reattached…" banner — the
+    # old latest-ok/latest-warn banners fired "Recovered." after every normal
+    # finish, which was wrong framing.
+    reattach_notice: str = ""
+    _job_offset: int = 0
+    _last_step_epoch: float = 0.0
+    _stop_deadline: float = 0.0
+    _stop_pending: bool = False
+    _poll_running: bool = False
+    _step_time_ms_ema: float = 0.0
+    _step_samples: int = 0
+
     # ---- Event handlers (stubs; backend hookup in Phase 3) -----------------
 
     @rx.event
-    def start_training(self) -> None:
-        """Handle the "Start training" button — honesty floor (CLIUI-B-001).
+    def dismiss_refusal(self) -> None:
+        """Clear the start-refusal banner (ui-v2 P1)."""
+        self.job_refusal = ""
 
-        UI-driven training is NOT wired yet: the real background-task hookup
-        (a single ``Trainer.train(...)`` dispatched via ``@rx.event(
-        background=True)``) is CLIUI-B-002, deferred to the feature pass.
+    @rx.event
+    def refresh_gpu(self) -> None:
+        """Fill the side rail's GPU block from this machine's live readings.
 
-        Pre-fix this stub flipped ``run_state`` to ``loading`` and appended a
-        ``[stub] … clicked`` event — presenting a permanent spinner and the
-        illusion of a live run that never started. Because the README
-        advertises UI training, that fake loading state was an actively
-        misleading surface (the Stage B UI honesty-floor finding). The handler
-        now stays at ``idle`` (no spinner) and surfaces ``cli_notice`` — an
-        operator-facing message pointing at the ``backprop train`` shell
-        command that works today. The breadcrumb is appended (not assigned) so
-        repeated clicks don't erase prior log lines.
+        Idle state shows DEVICE-WIDE usage (via pynvml → nvidia-smi): the
+        operator wants "the card has 2.4 GB in use", not the UI server's
+        own ~0 GB slice. During a run the step events (written by the CHILD
+        process) overwrite these fields with the training view.
         """
-        self.cli_notice = _CLI_NOTICE_TRAIN
+        try:
+            from .gpu_safety import get_gpu_status, get_system_gpu_readings
+
+            readings = get_system_gpu_readings()
+            status = get_gpu_status()
+            if readings is not None and readings.device_name:
+                self.gpu_name = readings.device_name
+            elif status.available:
+                self.gpu_name = status.device_name
+            else:
+                self.gpu_name = "No CUDA GPU"
+            if not self.job_id or self.run_state != "active":
+                if readings is not None:
+                    if readings.memory_total_gib > 0:
+                        self.vram_total_gb = round(readings.memory_total_gib, 1)
+                    self.vram_used_gb = round(readings.memory_used_gib, 2)
+                    if readings.temperature_c is not None:
+                        self.gpu_temp = float(readings.temperature_c)
+                else:
+                    if status.vram_total_gb and status.vram_total_gb > 0:
+                        self.vram_total_gb = round(float(status.vram_total_gb), 1)
+                    if status.vram_used_gb is not None:
+                        self.vram_used_gb = round(float(status.vram_used_gb), 2)
+                    if status.temperature_c is not None:
+                        self.gpu_temp = float(status.temperature_c)
+        except Exception:  # noqa: BLE001 — telemetry must never break the page
+            if not self.gpu_name:
+                self.gpu_name = "GPU status unavailable"
+
+    @rx.event
+    def start_training(self):
+        """Start an SFT run in a child process (ui-v2 P1).
+
+        Validation failures land in the refusal callout on screen (never a
+        fake spinner); a second concurrent start is refused the same way.
+        """
+        from .ui_jobs import (
+            JobRefusedError,
+            JobSpec,
+            JobValidationError,
+            get_job_manager,
+        )
+
+        self.job_refusal = ""
+        form_errors = [
+            err
+            for err in (
+                self.model_error,
+                self.dataset_path_error,
+                self.steps_error,
+                self.batch_size_error,
+                self.learning_rate_error,
+                self.lora_r_error,
+            )
+            if err
+        ]
+        if form_errors:
+            self.job_refusal = "Fix the highlighted fields first: " + "; ".join(form_errors)
+            return
+        # ui-v2 P1: the CLI's train subcommand exposes --mode lora|full and
+        # the 4-bit base quantization is the trainer default (QLoRA-style).
+        # The UI's quantization selector has no CLI twin yet — P3 CLI parity
+        # item (see PR body). P1 always runs the default LoRA-mode path.
+        spec = JobSpec(
+            kind="sft",
+            model=self.model,
+            dataset_path=self.dataset_path,
+            steps=int(self.steps),
+            batch=str(self.batch_size),
+            lr=float(self.learning_rate),
+            lora_r=int(self.lora_r),
+            mode="lora",
+        )
+        try:
+            handle = get_job_manager().start(spec)
+        except (JobValidationError, JobRefusedError, NotImplementedError) as exc:
+            self.job_refusal = str(exc)
+            return
+        except Exception as exc:  # noqa: BLE001 — spawn failure lands on screen
+            self.job_refusal = f"Could not start training: {exc}"
+            return
+        self.job_id = handle.job_id
+        self.job_phase = "queued"
+        self.job_total_steps = int(self.steps)
+        self.job_error_code = ""
+        self.job_error_message = ""
+        self.job_error_hint = ""
+        self.job_output_path = ""
+        self.job_stalled = False
+        self.run_state = "active"
+        self.current_step = 0
+        self.current_loss = 0.0
+        self.loss_history = []
+        self.ema_history = []
+        self.step_history = []
+        self.stop_requested = False
+        self.reattach_notice = ""
+        self.heartbeat_label = ""
+        self.eta_label = ""
+        self._step_time_ms_ema = 0.0
+        self._step_samples = 0
+        self._job_offset = 0
+        import time as _time
+
+        self._last_step_epoch = _time.time()
         self.events = [
             *self.events,
             {
-                "t": "00:00:00",
+                "t": _ts_now(),
                 "level": "info",
-                "msg": "UI training not wired yet — use `backprop train`.",
+                "msg": f"Run {handle.job_id} started in a separate process.",
+            },
+        ]
+        return TrainState.poll_job
+
+    @rx.event
+    def attach_active_job(self):
+        """Adopt/finalize on mount (ui-v2 P1 fix round).
+
+        Two cases:
+        - This page already knows the job (same session after a reload): the
+          poller may have died with the old socket, so immediately check for
+          a terminal state on disk (fixes 'reload right after the end still
+          shows active + Stop'); if still live and no poller is running,
+          restart it.
+        - A fresh session opens mid-run: adopt the live job so the page
+          shows REAL progress instead of pretending idle. This is the ONLY
+          path that sets ``reattach_notice`` — the banner means 'this page
+          did not start this run', never 'your run finished'.
+        """
+        from .ui_jobs import get_job_manager
+
+        manager = get_job_manager()
+        if self.job_id:
+            if self.run_state == "active":
+                status = manager.status()
+                if status.get("status") in ("done", "stopped", "failed", "crashed"):
+                    self._finalize_job(status)
+                    return
+                if not self._poll_running:
+                    return TrainState.poll_job
+            return
+        status = manager.status()
+        jid = str(status.get("job_id") or "")
+        if status.get("status") != "active" or not jid:
+            return
+        # Adopt: replays events.jsonl from byte 0 so the chart/phase rebuild.
+        self.job_id = jid
+        self.run_state = "active"
+        self.job_phase = str(status.get("phase") or "training")
+        self.job_total_steps = int(status.get("total_steps") or 0)
+        self.current_step = int(status.get("step") or 0)
+        self._job_offset = 0
+        import time as _time
+
+        self._last_step_epoch = _time.time()
+        self.reattach_notice = (
+            f"Reattached to a run this page didn't start ({jid}). "
+            "Progress below is live; Stop and save works the same."
+        )
+        self.events = [
+            *self.events,
+            {"t": _ts_now(), "level": "info", "msg": self.reattach_notice},
+        ]
+        if not self._poll_running:
+            return TrainState.poll_job
+
+    @rx.event(background=True)
+    async def poll_job(self) -> None:
+        """Tail events.jsonl ~1/s and mirror it into the state (ui-v2 P1)."""
+        import asyncio
+        import time as _time
+
+        from .ui_jobs import get_job_manager
+
+        manager = get_job_manager()
+        async with self:
+            if self._poll_running:
+                return  # a second poller would race the byte offset
+            self._poll_running = True
+        try:
+            while True:
+                async with self:
+                    if not self.job_id:
+                        break
+                    rows, offset = manager.tail_events(self.job_id, self._job_offset)
+                    self._job_offset = offset
+                    for row in rows:
+                        if row.get("kind") == "step":
+                            self._last_step_epoch = _time.time()
+                            self.job_stalled = False
+                        self._apply_job_event(row)
+                # heartbeat: no step event for 120 s while active -> warn once
+                async with self:
+                    self._tick_live_labels()
+                    if (
+                        self.run_state == "active"
+                        and self.job_phase == "training"
+                        and not self.job_stalled
+                        and _time.time() - self._last_step_epoch > 120
+                    ):
+                        self.job_stalled = True
+                        self.events = [
+                            *self.events,
+                            {
+                                "t": _ts_now(),
+                                "level": "warn",
+                                "msg": "No training progress for 2 minutes — "
+                                "check GPU activity before assuming a wedge.",
+                            },
+                        ]
+                    status = manager.status()
+                    if status.get("status") in ("done", "stopped", "failed", "crashed"):
+                        self._finalize_job(status)
+                        break
+                    # Stop escalation: grace window expired and the child still
+                    # breathes -> tree kill (ui-v2 P1 cooperative-stop contract).
+                    if (
+                        self._stop_pending
+                        and _time.monotonic() > self._stop_deadline
+                        and manager.is_alive(self.job_id)
+                    ):
+                        self._stop_pending = False
+                        manager.hard_kill(self.job_id)
+                        self.events = [
+                            *self.events,
+                            {
+                                "t": _ts_now(),
+                                "level": "warn",
+                                "msg": "Grace expired — training tree force-killed.",
+                            },
+                        ]
+                await asyncio.sleep(1.0)
+        finally:
+            async with self:
+                self._poll_running = False
+
+    def _apply_job_event(self, row: dict) -> None:
+        """Fold one events.jsonl row into the visible state. Plain method —
+        called from the poller inside ``async with self``."""
+        kind = row.get("kind")
+        if kind == "phase":
+            phase = str(row.get("phase") or "")
+            if phase and phase != self.job_phase:
+                self.job_phase = phase
+                level = "ok" if phase == "done" else "info"
+                self.events = [
+                    *self.events,
+                    {"t": _ts_now(), "level": level, "msg": f"Phase: {phase}"},
+                ]
+        elif kind == "step":
+            self.current_step = int(row.get("step") or 0)
+            total = row.get("total_steps") or 0
+            if total:
+                self.job_total_steps = int(total)
+            loss = row.get("loss")
+            if isinstance(loss, (int, float)):
+                self.current_loss = float(loss)
+                self.loss_history = [*self.loss_history[-79:], float(loss)]
+                self.step_history = [
+                    *self.step_history[-79:],
+                    self.current_step,
+                ]
+                ema = row.get("ema_loss")
+                self.ema_history = [
+                    *self.ema_history[-79:],
+                    float(ema) if isinstance(ema, (int, float)) else float(loss),
+                ]
+            stp = row.get("step_time_ms")
+            if isinstance(stp, (int, float)) and stp > 0:
+                # EMA (alpha 0.35) of the per-step wall time feeds the ETA
+                # range; warm-up gate: need a few samples before quoting it.
+                if self._step_samples == 0:
+                    self._step_time_ms_ema = float(stp)
+                else:
+                    self._step_time_ms_ema = (
+                        0.35 * float(stp) + 0.65 * self._step_time_ms_ema
+                    )
+                self._step_samples += 1
+            vram = (
+                row.get("vram_device_used_gib")
+                or row.get("vram_reserved_gib")
+                or row.get("vram_alloc_gib")
+            )
+            if isinstance(vram, (int, float)):
+                self.vram_used_gb = round(float(vram), 2)
+            vram_total = row.get("vram_device_total_gib")
+            if isinstance(vram_total, (int, float)) and vram_total > 0:
+                self.vram_total_gb = round(float(vram_total), 1)
+            temp = row.get("temp_c")
+            if isinstance(temp, (int, float)) and temp:
+                self.gpu_temp = float(temp)
+        elif kind == "checkpoint":
+            self.events = [
+                *self.events,
+                {
+                    "t": _ts_now(),
+                    "level": "ok",
+                    # The folder name only: a full path wrapped to ~8 lines
+                    # in the 296px rail. "Saved to:" shows the full path.
+                    "msg": "Checkpoint saved: "
+                    + (Path(str(row.get("path") or "")).name or str(row.get("path") or "")),
+                },
+            ]
+        elif kind == "error":
+            self.job_error_code = str(row.get("code") or "RUNTIME_ERROR")
+            self.job_error_message = str(row.get("message") or "")
+            self.job_error_hint = str(row.get("hint") or "")
+            self.events = [
+                *self.events,
+                {
+                    "t": _ts_now(),
+                    "level": "err",
+                    "msg": f"{self.job_error_code}: {self.job_error_message[:200]}",
+                },
+            ]
+
+    def _tick_live_labels(self) -> None:
+        """Refresh the heartbeat + ETA labels (called once per poll tick).
+
+        Requirement 10 of the ui-v2 digest: the operator should always see
+        'last step N s ago' (staleness at a glance) and, after warm-up, a
+        RANGE ETA ('about 3–5 min left') derived from the step-time EMA —
+        a range stays honest when steps vary (compile, eval, save).
+        """
+        import time as _time
+
+        if self.run_state != "active":
+            return
+        ago = max(0, int(_time.time() - self._last_step_epoch))
+        self.heartbeat_label = (
+            f"last step {ago} s ago" if self.job_phase == "training" else ""
+        )
+        # Warm-up per the handoff: about 20 steps or 5% of the run, whichever
+        # comes first, and at least two step-time samples for the EMA (steps
+        # are logged every 10, so a 5-sample floor hid the ETA until step 50).
+        warm_step = min(20, max(1, int(self.job_total_steps * 0.05)))
+        if (
+            self._step_samples >= 2
+            and self.current_step >= warm_step
+            and self.job_total_steps > self.current_step > 0
+            and self._step_time_ms_ema > 0
+        ):
+            remaining = self.job_total_steps - self.current_step
+            eta_s = self._step_time_ms_ema * remaining / 1000.0
+            lo, hi = _fmt_eta_range(eta_s)
+            self.eta_label = f"about {lo}–{hi} left" if lo != hi else f"about {lo} left"
+        else:
+            self.eta_label = ""
+
+    def _finalize_job(self, status: dict) -> None:
+        """Terminal bookkeeping shared by the poller and the stopper."""
+        outcome = str(status.get("status") or "done")
+        if outcome in ("failed", "crashed"):
+            self.run_state = "error"
+        elif outcome == "stopped":
+            # Honest state: the rail chip + page read "stopped", not "done".
+            self.run_state = "stopped"
+        else:
+            self.run_state = "done"
+        self.stop_requested = False
+        self._stop_pending = False
+        self.heartbeat_label = ""
+        self.eta_label = ""
+        out_path = str(status.get("output_path") or "")
+        if out_path:
+            self.job_output_path = out_path
+        label = {
+            "done": "Run completed.",
+            "stopped": "Stopped early — the checkpoint was saved before the halt.",
+            "failed": "Run failed.",
+            "crashed": "The training process died unexpectedly (crashed).",
+        }.get(outcome, outcome)
+        self.events = [
+            *self.events,
+            {
+                "t": _ts_now(),
+                "level": "ok" if outcome == "done" else ("warn" if outcome == "stopped" else "err"),
+                "msg": label,
             },
         ]
 
     @rx.event
     def stop_training(self) -> None:
-        """Stub handler for "Stop / pause" button."""
-        if self.run_state in ("active", "loading", "paused"):
-            self.run_state = "idle"
+        """Stop and save checkpoint (ui-v2 P1).
+
+        Writes control.json (the child saves at the next step boundary) and
+        arms the escalation deadline; the background poller performs the
+        tree kill if the grace window expires. Kept as a FOREGROUND event so
+        it stays unit-testable and never blocks on the grace wait.
+        """
+        import time as _time
+
+        from .ui_jobs import get_job_manager
+
+        manager = get_job_manager()
+        if self.job_id and manager.is_alive(self.job_id):
+            grace = manager.grace_window(self.job_id)
+            manager.request_stop(self.job_id)
+            self._stop_deadline = _time.monotonic() + grace
+            self._stop_pending = True
+            self.stop_requested = True
             self.events = [
                 *self.events,
-                {"t": "00:00:00", "level": "info", "msg": "[stub] training stopped"},
+                {
+                    "t": _ts_now(),
+                    "level": "warn",
+                    "msg": f"Stop requested — saving a checkpoint "
+                    f"(grace {int(grace)}s before a hard stop).",
+                },
             ]
+        elif self.run_state in ("active", "loading", "paused"):
+            self.run_state = "idle"
+            self.stop_requested = False
 
 
 class MultiRunState(rx.State):
@@ -1762,6 +2331,12 @@ class RunsState(rx.State):
             status = self.status_filter.strip() or None
             try:
                 rows = manager.list_runs(status=status, limit=self._DEFAULT_LIMIT)
+                # ui-v2 P1 fix round: UI-spawned runs keep their history in
+                # jobs/<run>/output/run_history.json — merge them in so the
+                # Runs page lists UI-driven training, not just CLI runs.
+                rows = _merge_job_history_rows(
+                    rows, history_dir, status=status, limit=self._DEFAULT_LIMIT
+                )
             except ValueError as exc:
                 # ValueError is operator-actionable (bad filter value); the
                 # exception message itself is shaped for display.

@@ -14,64 +14,32 @@ import reflex as rx
 from backpropagate.ui_state import MultiRunState
 
 from ..chrome import BpFooter, BpHeader, BpLeftNav, BpSideRail
+from ..components.field import FIELD_STYLE as _FIELD_STYLE
+from ..components.field import bp_field as _field
 from ..components.group import Group
-
-
-def _label(text: str) -> rx.Component:
-    return rx.text(
-        text,
-        size="1",
-        style={
-            "color": "var(--bp-text-2)",
-            "font_size": "11px",
-            "margin_bottom": "4px",
-        },
-    )
-
-
-def _err_text(error_var) -> rx.Component:
-    """Inline error label — peach text, 11px, only renders when non-empty."""
-    return rx.cond(
-        error_var != "",
-        rx.text(
-            error_var,
-            size="1",
-            style={"color": "var(--bp-peach)", "font_size": "11px"},
-        ),
-        rx.fragment(),
-    )
 
 
 def _model_group() -> rx.Component:
     return Group(
         rx.grid(
-            rx.flex(
-                _label("HuggingFace model id"),
+            _field(
+                "HuggingFace model id",
                 rx.input(
                     placeholder="meta-llama/Llama-3.1-8B",
                     default_value=MultiRunState.model,
                     on_change=MultiRunState.set_model,
                     size="2",
+                    style={**_FIELD_STYLE, "width": "100%"},
                     aria_label="HuggingFace model id",
                 ),
-                rx.cond(
-                    MultiRunState.model_error != "",
-                    rx.text(
-                        MultiRunState.model_error,
-                        size="1",
-                        style={"color": "var(--bp-peach)", "font_size": "11px"},
-                    ),
-                    rx.fragment(),
-                ),
-                direction="column",
-                width="100%",
+                MultiRunState.model_error,
             ),
-            rx.flex(
-                _label("Quantization"),
+            _field(
+                "Quantization",
                 rx.select.root(
                     rx.select.trigger(
                         placeholder="4-bit",
-                        style={"width": "100%"},
+                        style={**_FIELD_STYLE, "width": "100%"},
                         aria_label="Quantization level — 4-bit, 8-bit, or 16-bit",
                     ),
                     rx.select.content(
@@ -82,11 +50,9 @@ def _model_group() -> rx.Component:
                     value=MultiRunState.quantization,
                     on_change=MultiRunState.set_quantization,
                 ),
-                direction="column",
-                width="100%",
             ),
-            columns="2fr 1fr",
-            gap="3",
+            columns="1fr",
+            gap="var(--space-4)",
             width="100%",
         ),
         title="Model",
@@ -96,8 +62,8 @@ def _model_group() -> rx.Component:
 def _sweep_shape_group() -> rx.Component:
     return Group(
         rx.grid(
-            rx.flex(
-                _label("Num runs"),
+            _field(
+                "Num runs",
                 rx.input(
                     placeholder="3",
                     value=MultiRunState.num_runs.to_string(),
@@ -105,14 +71,13 @@ def _sweep_shape_group() -> rx.Component:
                     type="number",
                     size="2",
                     class_name="bp-num",
+                    style={**_FIELD_STYLE, "width": "100%"},
                     aria_label="Number of independent training runs to launch",
                 ),
-                _err_text(MultiRunState.num_runs_error),
-                direction="column",
-                width="100%",
+                MultiRunState.num_runs_error,
             ),
-            rx.flex(
-                _label("Samples per run"),
+            _field(
+                "Samples per run",
                 rx.input(
                     placeholder="500",
                     value=MultiRunState.samples_per_run.to_string(),
@@ -120,18 +85,17 @@ def _sweep_shape_group() -> rx.Component:
                     type="number",
                     size="2",
                     class_name="bp-num",
+                    style={**_FIELD_STYLE, "width": "100%"},
                     aria_label="Number of training samples per run",
                 ),
-                _err_text(MultiRunState.samples_per_run_error),
-                direction="column",
-                width="100%",
+                MultiRunState.samples_per_run_error,
             ),
-            rx.flex(
-                _label("Merge mode"),
+            _field(
+                "Merge mode",
                 rx.select.root(
                     rx.select.trigger(
                         placeholder="slao",
-                        style={"width": "100%"},
+                        style={**_FIELD_STYLE, "width": "100%"},
                         aria_label="LoRA merge mode — SLAO, Weighted, or TIES",
                     ),
                     rx.select.content(
@@ -142,14 +106,24 @@ def _sweep_shape_group() -> rx.Component:
                     value=MultiRunState.merge_mode,
                     on_change=MultiRunState.set_merge_mode,
                 ),
-                direction="column",
-                width="100%",
             ),
             columns="repeat(3, 1fr)",
-            gap="3",
+            gap="var(--space-4)",
             width="100%",
         ),
         title="Sweep shape",
+    )
+
+
+def _model_sweep_grid() -> rx.Component:
+    """Model + Sweep shape side by side on wide screens (ui-v2 redesign)."""
+    return rx.grid(
+        _model_group(),
+        _sweep_shape_group(),
+        columns=rx.breakpoints(initial="1", md="2"),
+        gap="var(--space-6)",
+        width="100%",
+        align="start",
     )
 
 
@@ -205,7 +179,7 @@ def _runs_table() -> rx.Component:
                                         style={"color": "var(--bp-muted)"},
                                     ),
                                     direction="column",
-                                    gap="2",
+                                    gap="var(--space-2)",
                                     align="center",
                                 ),
                                 col_span=len(headers),
@@ -308,18 +282,18 @@ def _cli_notice() -> rx.Component:
                 ),
                 direction="row",
                 align="center",
-                gap="2",
-                padding="3",
+                gap="var(--space-2)",
+                padding="var(--space-3)",
                 style={
                     "background": "var(--bp-surface-2)",
                     "border": "1px solid var(--bp-border)",
-                    "border_radius": "var(--bp-r-2)",
+                    "border_radius": "var(--bp-r-md)",
                 },
             ),
             role="status",
             aria_live="polite",
             aria_atomic="true",
-            margin_top="2",
+            margin_top="var(--space-2)",
         ),
         rx.fragment(),
     )
@@ -345,30 +319,40 @@ def multi_run_page() -> rx.Component:
             BpLeftNav(active="multi-run"),
             rx.scroll_area(
                 rx.flex(
-                    rx.heading(
-                        "Multi-run",
-                        size="6",
-                        style={"color": "var(--bp-text)", "font_weight": "500"},
+                    rx.flex(
+                        rx.heading(
+                            "Multi-run",
+                            size="7",
+                            style={
+                                "color": "var(--bp-text)",
+                                "font_weight": "600",
+                                "letter_spacing": "-0.02em",
+                            },
+                        ),
+                        rx.text(
+                            "SLAO sweep — train multiple runs and merge the LoRA "
+                            "adapters to defeat catastrophic forgetting.",
+                            size="2",
+                            style={"color": "var(--bp-muted)"},
+                        ),
+                        direction="column",
+                        gap="var(--space-2)",
+                        width="100%",
                     ),
-                    rx.text(
-                        "SLAO sweep — train multiple runs and merge the LoRA "
-                        "adapters to defeat catastrophic forgetting.",
-                        size="2",
-                        style={"color": "var(--bp-muted)"},
-                    ),
-                    _model_group(),
-                    _sweep_shape_group(),
+                    _model_sweep_grid(),
                     _runs_table(),
                     _cross_run_group(),
                     # CLIUI-B-001 (Stage C UI honesty floor): UI-driven sweeps
                     # are not wired yet. The Start button is marked "coming
                     # soon" and clicking it surfaces an inline notice pointing
                     # at `backprop multi-run` rather than faking a spinner.
+                    # ui-v2: the badge says where to go instead of "when" —
+                    # the web surface lands in P2; no "coming soon" copy.
                     rx.flex(
                         rx.button(
                             rx.text("Start multi-run"),
                             rx.badge(
-                                "coming soon",
+                                "CLI only in 1.8.2",
                                 color_scheme="gray",
                                 variant="soft",
                                 size="1",
@@ -377,21 +361,23 @@ def multi_run_page() -> rx.Component:
                             color_scheme="teal",
                             size="3",
                             on_click=MultiRunState.start_multi_run,
+                            style={"border_radius": "var(--bp-r-pill)", "min_width": "220px"},
                             aria_label=(
                                 "Start multi-run — web-UI sweeps ship in a "
                                 "future release; use the backprop multi-run "
                                 "shell command for now"
                             ),
                         ),
-                        gap="3",
-                        margin_top="2",
+                        gap="var(--space-3)",
+                        margin_top="var(--space-2)",
                         align="center",
+                        justify="end",
                     ),
                     _cli_notice(),
                     direction="column",
-                    gap="4",
-                    padding="6",
-                    max_width="780px",
+                    gap="var(--space-6)",
+                    padding="var(--space-7)",
+                    max_width="1320px",
                 ),
                 flex_grow="1",
                 style={"height": "100%"},

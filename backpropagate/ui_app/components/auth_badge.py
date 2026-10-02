@@ -79,12 +79,12 @@ def _emoji_for_mode() -> rx.Var[str]:
     """
     return rx.match(
         AuthBadgeState.mode_key,
-        ("no_auth_local", "[OPEN]"),
-        ("token_local", "[KEY]"),
-        ("basic_local", "[LOCK]"),
-        ("basic_shared", "[SHARED]"),
-        ("basic_network", "[NETWORK]"),
-        ("insecure", "[ALERT]"),
+        ("no_auth_local", "○"),
+        ("token_local", "●"),
+        ("basic_local", "●"),
+        ("basic_shared", "◐"),
+        ("basic_network", "◐"),
+        ("insecure", "▲"),
         "",
     )
 
@@ -137,7 +137,7 @@ def _bind_chip() -> rx.Component:
             },
             aria_hidden="true",
         ),
-        gap="1",
+        gap="var(--space-1)",
         align="center",
     )
 
@@ -185,7 +185,7 @@ def _auth_user_chip() -> rx.Component:
                 },
                 aria_hidden="true",
             ),
-            gap="1",
+            gap="var(--space-1)",
             align="center",
         ),
         rx.fragment(),
@@ -237,7 +237,7 @@ def BpAuthBadge() -> rx.Component:
                 ),
                 _bind_chip(),
                 _auth_user_chip(),
-                gap="1",
+                gap="var(--space-1)",
                 align="center",
             ),
             color_scheme=_color_scheme(),

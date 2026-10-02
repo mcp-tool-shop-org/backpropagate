@@ -88,7 +88,7 @@ def _filter_bar() -> rx.Component:
         ),
         direction="row",
         align="end",
-        gap="3",
+        gap="var(--space-3)",
         width="100%",
     )
 
@@ -112,10 +112,10 @@ def _table_header() -> rx.Component:
         rx.text("Loss", style=eyebrow),
         # Column widths: short id / time / model / dataset / status / dur / loss
         columns="80px 1.2fr 1.4fr 1.4fr 90px 80px 80px",
-        gap="3",
+        gap="var(--space-3)",
         width="100%",
-        padding_x="3",
-        padding_y="2",
+        padding_x="var(--space-3)",
+        padding_y="var(--space-2)",
         style={"border_bottom": "1px solid var(--bp-border)"},
     )
 
@@ -214,10 +214,10 @@ def _run_row(run: dict) -> rx.Component:
             },
         ),
         columns="80px 1.2fr 1.4fr 1.4fr 90px 80px 80px",
-        gap="3",
+        gap="var(--space-3)",
         width="100%",
-        padding_x="3",
-        padding_y="2",
+        padding_x="var(--space-3)",
+        padding_y="var(--space-2)",
         style={
             "border_bottom": "1px solid var(--bp-border)",
             "transition": "background 0.15s ease",
@@ -242,56 +242,70 @@ def _empty_state() -> rx.Component:
     model to see it here…" — confusingly wrong; runs DID exist, just none
     matching the filter.
     """
-    return rx.cond(
-        RunsState.status_filter != "",
-        # Filter is active — name THAT as the cause and offer a one-click
-        # reset rather than telling the operator to train a new model.
-        rx.flex(
-            rx.text(
-                "No runs match this filter.",
-                size="2",
-                style={"color": "var(--bp-text-2)"},
+    # ui-v2 P1 redesign pass 2: the empty state is a rounded card (the new
+    # page language), not naked text on the page background.
+    return rx.box(
+        rx.cond(
+            RunsState.status_filter != "",
+            # Filter is active — name THAT as the cause and offer a one-click
+            # reset rather than telling the operator to train a new model.
+            rx.flex(
+                rx.text(
+                    "No runs match this filter.",
+                    size="2",
+                    style={"color": "var(--bp-text-2)"},
+                ),
+                rx.text(
+                    "The status filter is hiding any runs in the other states. "
+                    "Reset the filter to see everything, or pick a different "
+                    "status from the dropdown above.",
+                    size="1",
+                    style={"color": "var(--bp-muted)"},
+                ),
+                rx.button(
+                    "Reset filter",
+                    on_click=lambda: RunsState.set_status_filter(""),
+                    variant="soft",
+                    color_scheme="teal",
+                    size="1",
+                    style={"border_radius": "var(--bp-r-pill)"},
+                    aria_label="Clear the run-history status filter",
+                ),
+                direction="column",
+                gap="var(--space-2)",
+                padding="var(--space-6)",
+                align="center",
+                width="100%",
             ),
-            rx.text(
-                "The status filter is hiding any runs in the other states. "
-                "Reset the filter to see everything, or pick a different "
-                "status from the dropdown above.",
-                size="1",
-                style={"color": "var(--bp-muted)"},
+            rx.flex(
+                rx.text(
+                    "No training runs recorded yet.",
+                    size="2",
+                    style={"color": "var(--bp-text-2)"},
+                ),
+                rx.text(
+                    "Train a model to see it here. From the UI: open the Single run "
+                    "tab and press Start training — UI runs land in this list "
+                    "automatically, no refresh needed. From the shell: run "
+                    "`backprop train <model> <dataset.jsonl>` with --output inside "
+                    "the UI output directory.",
+                    size="1",
+                    style={"color": "var(--bp-muted)"},
+                ),
+                direction="column",
+                gap="var(--space-2)",
+                padding="var(--space-6)",
+                align="center",
+                width="100%",
             ),
-            rx.button(
-                "Reset filter",
-                on_click=lambda: RunsState.set_status_filter(""),
-                variant="soft",
-                color_scheme="teal",
-                size="1",
-                aria_label="Clear the run-history status filter",
-            ),
-            direction="column",
-            gap="2",
-            padding="6",
-            align="center",
-            width="100%",
         ),
-        rx.flex(
-            rx.text(
-                "No training runs recorded yet.",
-                size="2",
-                style={"color": "var(--bp-text-2)"},
-            ),
-            rx.text(
-                "Train a model to see it here. From the UI: open the Single run "
-                "or Multi-run tab and click Start. From the shell: run "
-                "`backprop train <model> <dataset.jsonl>` and refresh this page.",
-                size="1",
-                style={"color": "var(--bp-muted)"},
-            ),
-            direction="column",
-            gap="2",
-            padding="6",
-            align="center",
-            width="100%",
-        ),
+        width="100%",
+        style={
+            "background": "var(--bp-surface)",
+            "border": "1px solid var(--bp-border)",
+            "border_radius": "var(--bp-r-lg)",
+            "box_shadow": "var(--bp-shadow-card)",
+        },
     )
 
 
@@ -332,7 +346,7 @@ def _error_callout() -> rx.Component:
             style={"align_self": "flex-end"},
         ),
         direction="column",
-        gap="2",
+        gap="var(--space-2)",
         width="100%",
     )
 
@@ -350,17 +364,26 @@ def runs_page() -> rx.Component:
             BpLeftNav(active="runs"),
             rx.scroll_area(
                 rx.flex(
-                    rx.heading(
-                        "Run history",
-                        size="6",
-                        style={"color": "var(--bp-text)", "font_weight": "500"},
-                    ),
-                    rx.text(
-                        "Recent training runs from this output directory. "
-                        "Mirrors `backprop list-runs`. Refresh after a CLI "
-                        "training to pick up new entries.",
-                        size="2",
-                        style={"color": "var(--bp-muted)"},
+                    rx.flex(
+                        rx.heading(
+                            "Run history",
+                            size="7",
+                            style={
+                                "color": "var(--bp-text)",
+                                "font_weight": "600",
+                                "letter_spacing": "-0.02em",
+                            },
+                        ),
+                        rx.text(
+                            "Recent training runs from this output directory. "
+                            "Mirrors `backprop list-runs`. Refresh after a CLI "
+                            "training to pick up new entries.",
+                            size="2",
+                            style={"color": "var(--bp-muted)"},
+                        ),
+                        direction="column",
+                        gap="var(--space-2)",
+                        width="100%",
                     ),
                     _filter_bar(),
                     rx.cond(
@@ -385,9 +408,9 @@ def runs_page() -> rx.Component:
                                     style={"color": "var(--bp-muted)"},
                                 ),
                                 direction="row",
-                                gap="2",
+                                gap="var(--space-2)",
                                 align="center",
-                                padding="4",
+                                padding="var(--space-4)",
                             ),
                             role="status",
                             aria_live="polite",
@@ -435,9 +458,9 @@ def runs_page() -> rx.Component:
                         rx.fragment(),
                     ),
                     direction="column",
-                    gap="4",
-                    padding="6",
-                    max_width="980px",
+                    gap="var(--space-6)",
+                    padding="var(--space-7)",
+                    max_width="1320px",
                     width="100%",
                     on_mount=RunsState.load_runs,
                 ),

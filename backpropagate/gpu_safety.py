@@ -41,6 +41,7 @@ Usage:
 import atexit
 import collections
 import logging
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -265,6 +266,140 @@ class GPUStatus:
 
     # Timestamp
     timestamp: float = field(default_factory=time.time)
+
+
+@dataclass
+class SystemGpuReadings:
+    """Device-wide GPU readings (ALL processes on the card, not just ours).
+
+    Pairs with :class:`GPUStatus`, whose ``vram_*`` fields are per-process
+    (``torch.cuda.memory_reserved``). The web UI's side rail and the ui-v2
+    job events want the OPERATOR's view: how full the card actually is and
+    how hot it is, regardless of which process owns the memory.
+
+    ``memory_*_gib`` are GiB (divided by 1024^3) so they line up with the
+    ``torch.cuda.get_device_properties().total_memory`` figure the UI shows
+    as the card's capacity.
+    """
+
+    device_name: str = ""
+    temperature_c: float | None = None
+    memory_used_gib: float = 0.0
+    memory_total_gib: float = 0.0
+    source: str = ""  # "pynvml" or "nvidia-smi" (diagnostics only)
+
+
+def _nvidia_smi_exe() -> str | None:
+    """Locate nvidia-smi without trusting PATH alone (Windows Store app
+    restrictions can hide PATH entries). Prefers PATH, then the standard
+    System32 + NVSMI install locations."""
+    import shutil
+
+    found = shutil.which("nvidia-smi")
+    if found:
+        return found
+    candidates = (
+        # Windows env-var casing is conventionally uppercase (SIM112);
+        # lookup itself is case-insensitive on Windows.
+        os.path.join(
+            os.environ.get("SYSTEMROOT", r"C:\Windows"), "System32", "nvidia-smi.exe"
+        ),
+        os.path.join(
+            os.environ.get("PROGRAMFILES", r"C:\Program Files"),
+            "NVIDIA Corporation",
+            "NVSMI",
+            "nvidia-smi.exe",
+        ),
+        "/usr/bin/nvidia-smi",
+    )
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+_system_readings_cache: dict[int, tuple[float, SystemGpuReadings | None]] = {}
+_SYSTEM_READINGS_MIN_INTERVAL_S = 0.8
+
+
+def get_system_gpu_readings(device_index: int = 0) -> SystemGpuReadings | None:
+    """Device-wide GPU readings; None when no NVML/nvidia-smi path works.
+
+    Source order: pynvml (when the optional dep is installed) -> the
+    nvidia-smi CLI that ships with every NVIDIA driver. ``pynvml`` is NOT a
+    backpropagate dependency — that is why temperature/power silently read
+    as null everywhere before this helper existed; the nvidia-smi fallback
+    is what makes these readings actually work on a stock install.
+
+    The argv is a fixed constant list (no shell, no operator input), and
+    results are cached for ~0.8 s per device so a 1 Hz UI poll spawns at
+    most one subprocess per second.
+    """
+    cached = _system_readings_cache.get(device_index)
+    if cached and (time.time() - cached[0]) < _SYSTEM_READINGS_MIN_INTERVAL_S:
+        return cached[1]
+
+    readings: SystemGpuReadings | None = None
+
+    if _ensure_nvml_initialized():
+        try:
+            import pynvml
+
+            handle = pynvml.nvmlDeviceGetHandleByIndex(device_index)
+            mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            gib = 1024.0**3
+            readings = SystemGpuReadings(
+                device_name=pynvml.nvmlDeviceGetName(handle) or "",
+                temperature_c=float(
+                    pynvml.nvmlDeviceGetTemperature(
+                        handle, pynvml.NVML_TEMPERATURE_GPU
+                    )
+                ),
+                memory_used_gib=round(int(mem.used) / gib, 2),
+                memory_total_gib=round(int(mem.total) / gib, 2),
+                source="pynvml",
+            )
+        except Exception as exc:  # noqa: BLE001 — fall through to nvidia-smi
+            logger.debug(f"pynvml system readings failed ({exc!r}); trying nvidia-smi")
+
+    if readings is None:
+        exe = _nvidia_smi_exe()
+        if exe:
+            import subprocess
+
+            try:
+                # nosec B603 — fixed argv list, no shell, no operator input.
+                out = subprocess.run(
+                    [
+                        exe,
+                        "--query-gpu=name,temperature.gpu,memory.used,memory.total",
+                        "--format=csv,noheader,nounits",
+                        "-i",
+                        str(int(device_index)),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=True,
+                )
+                row = out.stdout.strip().splitlines()[0]
+                name, temp_s, used_s, total_s = [c.strip() for c in row.split(",")][:4]
+                # Values are MiB; temperatures are whole degrees C. "N/A"
+                # appears on driver stacks that hide a sensor — stay honest.
+                readings = SystemGpuReadings(
+                    device_name=name,
+                    temperature_c=(
+                        float(temp_s) if temp_s not in ("", "N/A") else None
+                    ),
+                    memory_used_gib=round(float(used_s) / 1024.0, 2),
+                    memory_total_gib=round(float(total_s) / 1024.0, 2),
+                    source="nvidia-smi",
+                )
+            except Exception as exc:  # noqa: BLE001 — telemetry must never raise
+                logger.debug(f"nvidia-smi system readings failed: {exc!r}")
+
+    _system_readings_cache[device_index] = (time.time(), readings)
+    return readings
 
 
 # =============================================================================

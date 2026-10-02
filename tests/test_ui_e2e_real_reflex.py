@@ -132,7 +132,7 @@ def _session_cookie(set_cookie: str) -> str:
 class _UiLaunch:
     """A real ``backprop ui`` process plus everything needed to inspect and stop it."""
 
-    def __init__(self, tmp_path: Path, port: int, extra_args: list[str]) -> None:
+    def __init__(self, tmp_path: Path, port: int, extra_args: list[str], extra_env: dict | None = None) -> None:
         self.port = port
         self.run_dir = tmp_path / "run"
         self.run_dir.mkdir()
@@ -147,6 +147,8 @@ class _UiLaunch:
         # tmp_path so the real run stays hermetic (stub rxconfig + the .web
         # build tree land here instead of the user profile).
         env["BACKPROPAGATE_UI_WORKDIR"] = str(self.run_dir / "ui-workdir")
+        if extra_env:  # ui-v2 P1 flow test: pin the output sandbox, etc.
+            env.update(extra_env)
         cmd = [sys.executable, "-c", _BOOT, "ui", "--port", str(port), *extra_args]
         kwargs: dict[str, object] = {}
         if os.name == "nt":

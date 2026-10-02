@@ -141,7 +141,7 @@ def test_kto_end_to_end_trains_and_saves_adapter(tmp_path: Path) -> None:
     4. ``run_history.json`` records the run with ``method == "kto"``.
     """
     from backpropagate.checkpoints import RunHistoryManager
-    from backpropagate.trainer import Trainer, TrainingRun, _KTO_DEFAULT_LR
+    from backpropagate.trainer import _KTO_DEFAULT_LR, Trainer, TrainingRun
 
     data_path = tmp_path / "kto.jsonl"
     with open(data_path, "w", encoding="utf-8") as fh:

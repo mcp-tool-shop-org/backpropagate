@@ -23,7 +23,6 @@ import backpropagate.eval as ev
 from backpropagate.eval import (
     EvalGateDecision,
     EvalResult,
-    GenerationSample,
     bootstrap_ci_halfwidth,
     compute_task_metric,
     contains_match,
@@ -36,7 +35,6 @@ from backpropagate.eval import (
     token_f1,
 )
 from backpropagate.exceptions import UserInputError
-
 
 # =============================================================================
 # SQuAD normalization

@@ -20,7 +20,8 @@ The split:
   ``reflex_base/compiler/templates.py``). We also keep the legacy
   ``[data-theme="light"]`` selector as a fallback in case future Reflex
   versions switch back to a data-attribute strategy.
-- ``STYLESHEETS`` — external CSS hrefs (Geist + Geist Mono from Google Fonts).
+- ``STYLESHEETS`` — external CSS hrefs (none since ui-v2 P1; fonts are
+  vendored woff2 under ``assets/fonts/`` and inlined via ``FONTS_CSS``).
 - ``TOKENS_CSS`` — a pre-assembled stylesheet string that lays the THEME_TOKENS
   under ``:root`` and LIGHT_TOKENS under ``.light, .light-theme, [data-theme="light"]``.
   Inject via ``rx.html(f"<style>{TOKENS_CSS}</style>")`` at the app root.
@@ -62,7 +63,10 @@ from __future__ import annotations
 RADIX_THEME: dict[str, object] = {
     "accent_color": "teal",        # Ocean Mist primary
     "gray_color": "slate",         # cool neutrals; matches bg #0F1316
-    "radius": "medium",            # corresponds to our --bp-r-2 / r-3 ladder
+    # ui-v2 P1 redesign: Radix's "large" radius (~8-10px on inputs/selects)
+    # matches the Director's 8-10px field-radius bar; cards/buttons set
+    # explicit radii via the --bp-r-* tokens.
+    "radius": "large",
     "scaling": "100%",
     "panel_background": "solid",
     "has_background": True,
@@ -75,12 +79,16 @@ RADIX_THEME: dict[str, object] = {
 
 THEME_TOKENS: dict[str, str] = {
     # surfaces
-    "--bp-bg":        "#0F1316",   # refined: deeper than original #141618 for AA contrast on 14px body
-    "--bp-surface":   "#1A1F25",
-    "--bp-surface-2": "#232830",
-    "--bp-surface-3": "#2D3540",
-    "--bp-border":    "#2F3744",
-    "--bp-border-2":  "#3A4554",
+    # ui-v2 P1 redesign pass 2/3: page bg dark AND card face lifted.
+    # Pass 2 (#0C0F13 on #1A1F25) measured only ~4 perceptual units of
+    # separation at 1px borders — invisible on wide shots. Pass 3 lifts the
+    # card face to #20262E (≈2x the step) with a brighter hairline.
+    "--bp-bg":        "#0C0F13",
+    "--bp-surface":   "#20262E",
+    "--bp-surface-2": "#2A313B",
+    "--bp-surface-3": "#343D49",
+    "--bp-border":    "#424D5C",
+    "--bp-border-2":  "#515D6E",
     # text
     "--bp-text":      "#ECF1F5",
     "--bp-text-2":    "#C7D1D9",
@@ -95,11 +103,32 @@ THEME_TOKENS: dict[str, str] = {
     # type
     "--bp-sans": '"Geist", ui-sans-serif, system-ui, -apple-system, sans-serif',
     "--bp-mono": '"Geist Mono", ui-monospace, "SF Mono", Menlo, monospace',
-    # radii
+    # legacy radii ladder (kept for v1.x call sites)
     "--bp-r-1": "4px",
     "--bp-r-2": "6px",
     "--bp-r-3": "8px",
     "--bp-r-4": "12px",
+    # ui-v2 P1 redesign: the Director's curve + spacing bar.
+    # Radii: inputs/selects 10px, cards 14px, buttons pill.
+    "--bp-r-sm": "6px",
+    "--bp-r-md": "10px",
+    "--bp-r-lg": "14px",
+    "--bp-r-pill": "999px",
+    # One spacing scale used everywhere: 4/8/12/16/24/32/48.
+    "--bp-space-1": "4px",
+    "--bp-space-2": "8px",
+    "--bp-space-3": "12px",
+    "--bp-space-4": "16px",
+    "--bp-space-5": "24px",
+    "--bp-space-6": "32px",
+    "--bp-space-7": "48px",
+    # Field (input) surface sits one step deeper than the card it lives in,
+    # so fields read as inset wells rather than bordered boxes.
+    "--bp-field-bg": "#12171D",
+    # Soft elevation: cards float over the page background without a hard
+    # 1px-grid look.
+    "--bp-shadow-card": "0 1px 2px rgba(0, 0, 0, 0.45), 0 16px 36px rgba(0, 0, 0, 0.50)",
+    "--bp-shadow-pop": "0 2px 6px rgba(0, 0, 0, 0.48), 0 20px 56px rgba(0, 0, 0, 0.55)",
     # focus ring — WCAG 2.4.7, do not remove
     "--bp-focus": "0 0 0 2px var(--bp-bg), 0 0 0 4px var(--bp-teal)",
 }
@@ -110,12 +139,15 @@ THEME_TOKENS: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 LIGHT_TOKENS: dict[str, str] = {
-    "--bp-bg":        "#F4F6F8",
+    # ui-v2 P1 redesign pass 2/3: page bg one step deeper/bluer so white
+    # cards read as panels; hairline border + shadow carry the edge (the
+    # 0.06-alpha shadow from pass 2 was invisible at 1920px).
+    "--bp-bg":        "#E9EEF2",
     "--bp-surface":   "#FFFFFF",
     "--bp-surface-2": "#F0F3F6",
     "--bp-surface-3": "#E4EAEF",
-    "--bp-border":    "#D8DFE5",
-    "--bp-border-2":  "#C5CFD7",
+    "--bp-border":    "#C3CDD6",
+    "--bp-border-2":  "#ADBAC6",
     "--bp-text":      "#131820",
     "--bp-text-2":    "#2E3A47",
     "--bp-muted":     "#5A6B78",
@@ -125,17 +157,40 @@ LIGHT_TOKENS: dict[str, str] = {
     "--bp-seafoam":   "#3FA37A",
     "--bp-amber":     "#B07A2C",
     "--bp-peach":     "#B85A38",
+    # ui-v2 P1 redesign additions (parity with THEME_TOKENS)
+    "--bp-field-bg":  "#FBFDFE",
+    "--bp-shadow-card": "0 1px 2px rgba(23, 31, 41, 0.08), 0 12px 32px rgba(23, 31, 41, 0.12)",
+    "--bp-shadow-pop":  "0 2px 6px rgba(23, 31, 41, 0.10), 0 20px 48px rgba(23, 31, 41, 0.16)",
 }
 
 
 # ---------------------------------------------------------------------------
-# 2b. External stylesheets (Geist + Geist Mono from Google Fonts)
-# ---------------------------------------------------------------------------
+# 2b. Self-hosted fonts (ui-v2 P1)
+#
+# Draft2 audit: Geist never actually loaded — the Google Fonts stylesheet
+# tripped the CSP (headless Chrome logs showed the block) AND it cannot work
+# offline, which the Microsoft Store build requires. The variable woff2
+# builds are vendored under ``backpropagate/assets/fonts/`` (OFL 1.1, Geist
+# v1.7.2 — see assets/fonts/NOTICE.md for hashes + upstream URL) and served
+# same-origin at ``/fonts/<name>`` by Reflex's assets handler.
 
-STYLESHEETS: list[str] = [
-    "https://fonts.googleapis.com/css2?"
-    "family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap",
-]
+FONTS_CSS: str = """@font-face {
+  font-family: 'Geist';
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/geist-var.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Geist Mono';
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/geist-mono.woff2') format('woff2');
+}"""
+
+#: External stylesheet hrefs. Empty on purpose — every style the app needs
+#: is inlined via TOKENS_CSS so first paint has zero third-party surface
+#: (CSP ``style-src 'self' 'unsafe-inline'``; ``font-src 'self'``).
+STYLESHEETS: list[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +204,7 @@ def _emit_block(selector: str, tokens: dict[str, str]) -> str:
 
 
 TOKENS_CSS: str = "\n\n".join([
+    FONTS_CSS,
     _emit_block(":root", THEME_TOKENS),
     # FRONTEND-F-001 (Wave 5.5): match every selector that Reflex /
     # next-themes / Radix Themes may emit when the operator flips to light:
@@ -169,8 +225,81 @@ TOKENS_CSS: str = "\n\n".join([
   line-height: 1.5;
 }
 
+/* Radix Themes reads these custom props for its component font stacks
+   (ui-v2 P1): route them at our self-hosted Geist pair so buttons, badges,
+   headings and code blocks stop falling back to the Radix default stack. */
+.radix-themes {
+  --default-font-family: var(--bp-sans);
+  --heading-font-family: var(--bp-sans);
+  --code-font-family: var(--bp-mono);
+  --strong-font-family: var(--bp-sans);
+  --em-font-family: var(--bp-sans);
+  --quote-font-family: var(--bp-sans);
+}
+
+/* Native <details> accordion (ui-v2 P1): hide the UA triangle, rotate our
+   chevron, keep the fold keyboard-accessible. */
+.bp-accordion > summary {
+  list-style: none;
+}
+.bp-accordion > summary::-webkit-details-marker {
+  display: none;
+}
+.bp-accordion .bp-accordion-chevron {
+  display: inline-flex;
+  transition: transform 0.2s ease;
+  color: var(--bp-muted-2);
+}
+.bp-accordion[open] .bp-accordion-chevron {
+  transform: rotate(180deg);
+}
+.bp-accordion > summary:hover .bp-accordion-chevron {
+  color: var(--bp-text-2);
+}
+
 code, pre, .mono {
   font-family: var(--bp-mono);
+}
+
+/* Inline SVG icons (ui-v2 P1 redesign pass 2): the icon pack uses
+   stroke/fill=currentColor, which only inherits when the SVG is inlined
+   (served via <img> it always resolves to black). See components/icon.py. */
+.bp-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  line-height: 0;
+}
+.bp-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   ui-v2 P1 redesign — motion discipline. All interactive surfaces get a
+   short (≤180ms) ease transition on hover/focus/state; nothing bounces,
+   nothing longer than 0.25s. Radix Buttons + TextFields get the shared
+   base so every page inherits it without per-site style noise.
+   ───────────────────────────────────────────────────────────────────── */
+.rt-Button {
+  transition: background-color 0.15s ease, box-shadow 0.15s ease,
+    color 0.15s ease, opacity 0.15s ease;
+  cursor: pointer;
+}
+.rt-Button:disabled {
+  cursor: not-allowed;
+}
+.rt-TextFieldInput,
+.rt-SelectTrigger {
+  transition: border-color 0.15s ease, box-shadow 0.15s ease,
+    background-color 0.15s ease;
+}
+.bp-nav-row {
+  border-radius: var(--bp-r-pill);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.bp-nav-row:hover {
+  background: var(--bp-surface-2);
 }
 
 /* WCAG 2.4.7 — preserve focus rings for keyboard users.

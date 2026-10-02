@@ -17,6 +17,8 @@ import reflex as rx
 from backpropagate.ui_state import ExportState
 
 from ..chrome import BpFooter, BpHeader, BpLeftNav, BpSideRail
+from ..components.field import FIELD_STYLE as _FIELD_STYLE
+from ..components.field import bp_label as _label
 from ..components.group import Group
 
 # GGUF quant grid — q4_K_M is the recommended default (per the design canvas).
@@ -30,18 +32,6 @@ _GGUF_QUANTS = [
 ]
 
 
-def _label(text: str) -> rx.Component:
-    return rx.text(
-        text,
-        size="1",
-        style={
-            "color": "var(--bp-text-2)",
-            "font_size": "11px",
-            "margin_bottom": "4px",
-        },
-    )
-
-
 def _source_group() -> rx.Component:
     return Group(
         rx.flex(
@@ -51,7 +41,7 @@ def _source_group() -> rx.Component:
                 default_value=ExportState.source_model_path,
                 on_change=ExportState.set_source_model_path,
                 size="2",
-                style={"width": "100%"},
+                style={**_FIELD_STYLE, "width": "100%"},
                 aria_label="Source adapter or merged-model path",
             ),
             rx.cond(
@@ -70,43 +60,38 @@ def _source_group() -> rx.Component:
     )
 
 
+def _choice_card(radio_label: str, value: str, description: str) -> rx.Component:
+    """One radio option as a bordered choice card: label on top, muted
+    description on the next line. (ui-v2 P1 redesign pass 2 — the previous
+    wrap=wrap flex row rendered all descriptions concatenated on one line.)"""
+    return rx.flex(
+        rx.radio.item(radio_label, value=value),
+        rx.text(
+            description,
+            size="1",
+            style={"color": "var(--bp-muted)", "font_size": "11px"},
+        ),
+        direction="column",
+        gap="var(--space-1)",
+        padding="var(--space-3)",
+        style={
+            "background": "var(--bp-surface-2)",
+            "border": "1px solid var(--bp-border)",
+            "border_radius": "var(--bp-r-md)",
+        },
+    )
+
+
 def _format_group() -> rx.Component:
     return Group(
         rx.radio.root(
-            rx.flex(
-                rx.flex(
-                    rx.radio.item("LoRA", value="lora"),
-                    rx.text(
-                        "Just the adapter weights (small · portable).",
-                        size="1",
-                        style={"color": "var(--bp-muted)"},
-                    ),
-                    direction="column",
-                    gap="1",
-                ),
-                rx.flex(
-                    rx.radio.item("Merged", value="merged"),
-                    rx.text(
-                        "Adapter merged into base — full HF model.",
-                        size="1",
-                        style={"color": "var(--bp-muted)"},
-                    ),
-                    direction="column",
-                    gap="1",
-                ),
-                rx.flex(
-                    rx.radio.item("GGUF", value="gguf"),
-                    rx.text(
-                        "Quantized GGUF — Ollama / llama.cpp ready.",
-                        size="1",
-                        style={"color": "var(--bp-muted)"},
-                    ),
-                    direction="column",
-                    gap="1",
-                ),
-                direction="row",
-                gap="4",
-                wrap="wrap",
+            rx.grid(
+                _choice_card("LoRA", "lora", "Just the adapter weights (small · portable)."),
+                _choice_card("Merged", "merged", "Adapter merged into base — full HF model."),
+                _choice_card("GGUF", "gguf", "Quantized GGUF — Ollama / llama.cpp ready."),
+                columns="repeat(3, 1fr)",
+                gap="var(--space-3)",
+                width="100%",
             ),
             value=ExportState.format,
             on_change=ExportState.set_format,
@@ -120,27 +105,9 @@ def _quant_grid() -> rx.Component:
     return Group(
         rx.radio.root(
             rx.grid(
-                *(
-                    rx.flex(
-                        rx.radio.item(quant, value=quant),
-                        rx.text(
-                            note,
-                            size="1",
-                            style={"color": "var(--bp-muted)", "font_size": "11px"},
-                        ),
-                        direction="column",
-                        gap="1",
-                        padding="3",
-                        style={
-                            "background": "var(--bp-surface-2)",
-                            "border": "1px solid var(--bp-border)",
-                            "border_radius": "var(--bp-r-2)",
-                        },
-                    )
-                    for quant, note in _GGUF_QUANTS
-                ),
+                *(_choice_card(quant, quant, note) for quant, note in _GGUF_QUANTS),
                 columns="repeat(3, 1fr)",
-                gap="3",
+                gap="var(--space-3)",
                 width="100%",
             ),
             value=ExportState.gguf_quant,
@@ -159,7 +126,7 @@ def _ollama_group() -> rx.Component:
                 on_change=ExportState.set_ollama_register,
             ),
             direction="row",
-            gap="2",
+            gap="var(--space-2)",
             align="center",
         ),
         rx.flex(
@@ -169,7 +136,7 @@ def _ollama_group() -> rx.Component:
                 default_value=ExportState.ollama_name,
                 on_change=ExportState.set_ollama_name,
                 size="2",
-                style={"width": "100%"},
+                style={**_FIELD_STYLE, "width": "100%"},
                 aria_label="Name to register the model under in Ollama",
             ),
             rx.cond(
@@ -207,7 +174,7 @@ def _hub_group() -> rx.Component:
                 on_change=ExportState.set_hub_enabled,
             ),
             direction="row",
-            gap="2",
+            gap="var(--space-2)",
             align="center",
         ),
         rx.cond(
@@ -220,7 +187,7 @@ def _hub_group() -> rx.Component:
                         value=ExportState.hub_repo_id,
                         on_change=ExportState.set_hub_repo_id,
                         size="2",
-                        style={"width": "100%"},
+                        style={**_FIELD_STYLE, "width": "100%"},
                         aria_label="HuggingFace repo id in <owner>/<repo> form",
                     ),
                     rx.cond(
@@ -243,6 +210,7 @@ def _hub_group() -> rx.Component:
                             value=ExportState.hub_branch,
                             on_change=ExportState.set_hub_branch,
                             size="2",
+                            style={**_FIELD_STYLE, "width": "100%"},
                             aria_label="Branch / revision to push to (defaults to main)",
                         ),
                         rx.cond(
@@ -267,14 +235,14 @@ def _hub_group() -> rx.Component:
                             ),
                             direction="row",
                             align="center",
-                            gap="2",
+                            gap="var(--space-2)",
                             style={"padding_top": "6px"},
                         ),
                         direction="column",
                         width="100%",
                     ),
                     columns="1fr 1fr",
-                    gap="3",
+                    gap="var(--space-3)",
                     width="100%",
                 ),
                 rx.flex(
@@ -293,7 +261,7 @@ def _hub_group() -> rx.Component:
                         on_change=ExportState.set_hub_token,
                         size="2",
                         type="password",
-                        style={"width": "100%"},
+                        style={**_FIELD_STYLE, "width": "100%"},
                         aria_label="HuggingFace API token (write scope) — cleared on successful push",
                     ),
                     rx.cond(
@@ -331,7 +299,7 @@ def _hub_group() -> rx.Component:
                         value=ExportState.hub_token_file_path,
                         on_change=ExportState.set_hub_token_file_path,
                         size="2",
-                        style={"width": "100%"},
+                        style={**_FIELD_STYLE, "width": "100%"},
                         aria_label=(
                             "Path to a file containing the HF token (mode-0600 "
                             "recommended). Mutually exclusive with the token "
@@ -384,7 +352,7 @@ def _hub_group() -> rx.Component:
                         },
                     ),
                     direction="column",
-                    gap="2",
+                    gap="var(--space-2)",
                     align="start",
                 ),
                 rx.flex(
@@ -407,7 +375,7 @@ def _hub_group() -> rx.Component:
                         aria_label="Push the source adapter / model to the HuggingFace Hub repo",
                     ),
                     direction="row",
-                    gap="2",
+                    gap="var(--space-2)",
                     align="center",
                 ),
                 rx.cond(
@@ -442,8 +410,8 @@ def _hub_group() -> rx.Component:
                             ),
                             direction="row",
                             align="center",
-                            gap="2",
-                            padding="3",
+                            gap="var(--space-2)",
+                            padding="var(--space-3)",
                             style={
                                 "background": "var(--bp-surface-2)",
                                 "border": rx.cond(
@@ -461,7 +429,7 @@ def _hub_group() -> rx.Component:
                     rx.fragment(),
                 ),
                 direction="column",
-                gap="3",
+                gap="var(--space-3)",
                 width="100%",
             ),
             rx.fragment(),
@@ -492,8 +460,8 @@ def _cli_notice() -> rx.Component:
                 ),
                 direction="row",
                 align="center",
-                gap="2",
-                padding="3",
+                gap="var(--space-2)",
+                padding="var(--space-3)",
                 style={
                     "background": "var(--bp-surface-2)",
                     "border": "1px solid var(--bp-border)",
@@ -503,7 +471,7 @@ def _cli_notice() -> rx.Component:
             role="status",
             aria_live="polite",
             aria_atomic="true",
-            margin_top="2",
+            margin_top="var(--space-2)",
         ),
         rx.fragment(),
     )
@@ -546,13 +514,13 @@ def _output_group() -> rx.Component:
                         style={"color": "var(--bp-muted)"},
                     ),
                     direction="column",
-                    gap="2",
-                    padding_y="3",
+                    gap="var(--space-2)",
+                    padding_y="var(--space-3)",
                 ),
                 rx.fragment(),
             ),
             direction="column",
-            gap="1",
+            gap="var(--space-1)",
             width="100%",
         ),
         title="Output",
@@ -567,16 +535,25 @@ def export_page() -> rx.Component:
             BpLeftNav(active="export"),
             rx.scroll_area(
                 rx.flex(
-                    rx.heading(
-                        "Export",
-                        size="6",
-                        style={"color": "var(--bp-text)", "font_weight": "500"},
-                    ),
-                    rx.text(
-                        "Convert a trained adapter into LoRA / merged / GGUF "
-                        "and optionally register with Ollama.",
-                        size="2",
-                        style={"color": "var(--bp-muted)"},
+                    rx.flex(
+                        rx.heading(
+                            "Export",
+                            size="7",
+                            style={
+                                "color": "var(--bp-text)",
+                                "font_weight": "600",
+                                "letter_spacing": "-0.02em",
+                            },
+                        ),
+                        rx.text(
+                            "Convert a trained adapter into LoRA / merged / GGUF "
+                            "and optionally register with Ollama.",
+                            size="2",
+                            style={"color": "var(--bp-muted)"},
+                        ),
+                        direction="column",
+                        gap="var(--space-2)",
+                        width="100%",
                     ),
                     _source_group(),
                     _format_group(),
@@ -590,11 +567,13 @@ def export_page() -> rx.Component:
                     # surfaces an inline notice pointing at `backprop export`.
                     # The HuggingFace Hub push above (_hub_group) is a SEPARATE,
                     # fully-wired handler and is unaffected.
+                    # ui-v2: badge points at the shell command instead of
+                    # promising a date — web export lands in P2.
                     rx.flex(
                         rx.button(
                             rx.text("Export"),
                             rx.badge(
-                                "coming soon",
+                                "CLI only in 1.8.2",
                                 color_scheme="gray",
                                 variant="soft",
                                 size="1",
@@ -603,21 +582,23 @@ def export_page() -> rx.Component:
                             color_scheme="teal",
                             size="3",
                             on_click=ExportState.start_export,
+                            style={"border_radius": "var(--bp-r-pill)", "min_width": "220px"},
                             aria_label=(
                                 "Export — web-UI export ships in a future "
                                 "release; use the backprop export shell command "
                                 "for now"
                             ),
                         ),
-                        gap="3",
-                        margin_top="2",
+                        gap="var(--space-3)",
+                        margin_top="var(--space-2)",
                         align="center",
+                        justify="end",
                     ),
                     _cli_notice(),
                     direction="column",
-                    gap="4",
-                    padding="6",
-                    max_width="780px",
+                    gap="var(--space-6)",
+                    padding="var(--space-7)",
+                    max_width="1320px",
                 ),
                 flex_grow="1",
                 style={"height": "100%"},

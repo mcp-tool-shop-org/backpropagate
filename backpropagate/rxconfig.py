@@ -146,4 +146,7 @@ config = rx.Config(
     telemetry_enabled=False,
     backend_only=False,
     cors_allowed_origins=_DEFAULT_CORS_ALLOWED_ORIGINS,
+    # The floating "Built with Reflex" badge overlaps our footer links
+    # (draft2 screenshot audit, FRONTEND-F-FOOTER). Hidden per design.
+    show_built_with_reflex=False,
 )

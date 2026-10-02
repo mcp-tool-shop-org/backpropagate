@@ -290,61 +290,155 @@ class TestTrainStateSetters:
 class TestTrainStateEventHandlers:
     """Exercise the Start/Stop event handlers.
 
-    CLIUI-B-001 (Stage C UI honesty floor): the Start handlers used to flip
-    ``run_state`` to ``loading`` and append a ``[stub] … clicked`` event,
-    which presented a permanent spinner and the *illusion* of a training run
-    that never actually started. The README advertises UI training, so a
-    fake loading state is a dishonest surface. The handler now stays at
-    ``idle`` (no spinner) and surfaces ``cli_notice`` — an operator-facing
-    "run ``backprop train`` from the shell for now" message. The real
-    background-task hookup (CLIUI-B-002) is deferred to the feature pass.
+    ui-v2 P1: ``start_training`` spawns a real training subprocess via
+    ``ui_jobs.JobManager`` (the CLIUI-B-002 hookup, now landed). The honesty
+    floor survives as the REFUSAL contract: anything that cannot start
+    (invalid form, dataset outside the sandbox, second concurrent run) sets
+    ``job_refusal`` on screen and never touches a fake loading state.
     """
 
-    def test_start_training_does_not_enter_loading_and_surfaces_cli_notice(self):
-        """``start_training`` stays idle (no fake spinner) + sets ``cli_notice``.
-
-        CLIUI-B-001 honesty floor: clicking Start must NOT latch a permanent
-        loading spinner that implies a live run. It surfaces a notice that
-        points the operator at ``backprop train``.
-        """
+    def test_start_training_refuses_without_dataset(self, tmp_path):
+        """No dataset -> refusal on screen, run_state never leaves idle."""
         from backpropagate.ui_state import TrainState
 
         state = TrainState()
         assert state.run_state == "idle"
-        assert state.cli_notice == ""
+        assert state.job_refusal == ""
         state.start_training()
-        # No fake loading spinner — the state never leaves idle.
         assert state.run_state == "idle"
-        # The notice names the CLI command so the operator knows where to go.
-        assert state.cli_notice != ""
-        assert "backprop train" in state.cli_notice
-        # One info-level breadcrumb is appended (kept consistent across the
-        # three Start handlers — CLIUI-B-009).
-        assert len(state.events) == 1
-        assert state.events[0]["level"] == "info"
-        assert "training" in state.events[0]["msg"].lower()
+        assert state.job_refusal != ""
+        assert state.job_id == ""
 
-    def test_start_training_appends_does_not_overwrite_prior_events(self):
-        """Repeated clicks append rather than erase the prior log (CLIUI-B-009)."""
+    def test_start_training_launches_child_process_when_valid(
+        self, tmp_path, monkeypatch
+    ):
+        """A valid spec spawns the child and turns the rail live."""
+        import backpropagate.ui_jobs as ui_jobs
+        import backpropagate.ui_security as sec
+        from backpropagate.ui_state import TrainState
+
+        monkeypatch.setattr(sec, "get_ui_output_dir", lambda: tmp_path)
+        data = tmp_path / "ds.jsonl"
+        data.write_text('{"text": "hi"}\n')
+
+        class _FakeManager:
+            def __init__(self):
+                self.specs = []
+
+            def start(self, spec):
+                self.specs.append(spec)
+                return ui_jobs.JobHandle(
+                    job_id="run_20261001_000000_1_ab12",
+                    run_dir=tmp_path / "run_20261001_000000_1_ab12",
+                    pid=4242,
+                    started_at=0.0,
+                    spec=spec,
+                )
+
+        fake = _FakeManager()
+        monkeypatch.setattr(ui_jobs, "get_job_manager", lambda: fake)
+
+        state = TrainState()
+        state.dataset_path = str(data)
+        state.start_training()
+        assert state.run_state == "active"
+        assert state.job_id.startswith("run_")
+        assert state.job_refusal == ""
+        assert fake.specs and fake.specs[0].kind == "sft"
+        assert fake.specs[0].steps == state.steps
+        assert any("started" in e["msg"] for e in state.events)
+
+    def test_start_training_refusal_when_manager_busy(self, tmp_path, monkeypatch):
+        """A second concurrent start is refused ON SCREEN (handoff rule)."""
+        import backpropagate.ui_jobs as ui_jobs
+        import backpropagate.ui_security as sec
+        from backpropagate.ui_state import TrainState
+
+        monkeypatch.setattr(sec, "get_ui_output_dir", lambda: tmp_path)
+        data = tmp_path / "ds.jsonl"
+        data.write_text('{"text": "hi"}\n')
+
+        class _BusyManager:
+            def start(self, spec):
+                raise ui_jobs.JobRefusedError("A job is already running (run_x).")
+
+        monkeypatch.setattr(ui_jobs, "get_job_manager", lambda: _BusyManager())
+        state = TrainState()
+        state.dataset_path = str(data)
+        state.start_training()
+        assert state.run_state == "idle"
+        assert "already running" in state.job_refusal
+
+    def test_apply_job_event_folds_step_and_terminal(self):
+        """The poller's row-fold drives step/loss/VRAM/temp and terminal state."""
         from backpropagate.ui_state import TrainState
 
         state = TrainState()
-        state.start_training()
-        state.start_training()
-        assert len(state.events) == 2
+        state.job_id = "run_x"
+        state.run_state = "active"
+        state._apply_job_event(
+            {
+                "kind": "step",
+                "step": 12,
+                "total_steps": 40,
+                "loss": 0.42,
+                "vram_reserved_gib": 9.5,
+                "temp_c": 61.0,
+            }
+        )
+        assert state.current_step == 12
+        assert state.job_total_steps == 40
+        assert state.current_loss == 0.42
+        assert state.loss_history == [0.42]
+        assert state.step_history == [12]
+        assert state.vram_used_gb == 9.5
+        assert state.gpu_temp == 61.0
+        # device-wide VRAM keys win over the per-process fallback when present
+        state._apply_job_event(
+            {
+                "kind": "step",
+                "step": 13,
+                "total_steps": 40,
+                "loss": 0.40,
+                "ema_loss": 0.41,
+                "vram_device_used_gib": 12.0,
+                "vram_device_total_gib": 31.8,
+                "vram_reserved_gib": 9.6,
+            }
+        )
+        assert state.vram_used_gb == 12.0
+        assert state.vram_total_gb == 31.8
+        assert state.step_history == [12, 13]
+        assert state.ema_history[-1] == 0.41
+        assert state.loss_label == "0.4000"
+        assert state.ema_loss_label == "0.4100"
+        state._apply_job_event(
+            {"kind": "error", "code": "RUNTIME_OOM", "message": "cuda oom", "hint": "smaller batch"}
+        )
+        assert state.job_error_code == "RUNTIME_OOM"
+        assert state.job_error_hint == "smaller batch"
+        state._finalize_job({"status": "stopped", "output_path": "out/run_x"})
+        assert state.run_state == "stopped"
+        assert state.job_output_path == "out/run_x"
+        assert any("Stopped early" in e["msg"] for e in state.events)
+        state._finalize_job({"status": "crashed"})
+        assert state.run_state == "error"
 
-    def test_stop_training_returns_to_idle_from_active_states(self):
-        """``stop_training`` returns to 'idle' from loading/active/paused."""
+    def test_stop_training_idles_when_no_active_job(self, monkeypatch):
+        """Stop with nothing running is a no-op landing on idle."""
+        import backpropagate.ui_jobs as ui_jobs
         from backpropagate.ui_state import TrainState
 
+        class _IdleManager:
+            def is_alive(self, job_id):
+                return False
+
+        monkeypatch.setattr(ui_jobs, "get_job_manager", lambda: _IdleManager())
         state = TrainState()
-        # Simulate a future live run reaching an active state (Start no longer
-        # sets loading — CLIUI-B-001). Stop must still wind it back to idle.
+        state.job_id = "run_nothing"
         state.run_state = "active"
         state.stop_training()
         assert state.run_state == "idle"
-        # The stop event was appended.
-        assert any("stopped" in e["msg"].lower() for e in state.events)
 
     def test_stop_training_from_idle_is_noop(self):
         """``stop_training`` from idle does NOT modify the state."""
@@ -2815,3 +2909,184 @@ class TestErrorSuggestionSlotsBackwardCompatible:
 
         assert state.action_error == ""
         assert state.action_error_suggestion == ""
+
+
+# =============================================================================
+# TrainState — ui-v2 P1 fix round (attach, heartbeat/ETA, stopped state)
+# =============================================================================
+
+
+class TestTrainStateAttach:
+    """attach_active_job: finalize-fast on same-session terminal, adopt a
+    live foreign run, and never double-start the poller."""
+
+    def test_attach_finalizes_a_terminal_same_session_job(self, monkeypatch):
+        """Lead fix #5: reload right after the end must not show 'active'."""
+        import backpropagate.ui_jobs as ui_jobs
+        from backpropagate.ui_state import TrainState
+
+        class _Mgr:
+            def status(self):
+                return {"status": "stopped", "output_path": "out/x", "job_id": "run_x"}
+
+        monkeypatch.setattr(ui_jobs, "get_job_manager", lambda: _Mgr())
+        state = TrainState()
+        state.job_id = "run_x"
+        state.run_state = "active"
+        result = state.attach_active_job()
+        assert state.run_state == "stopped"
+        assert state.job_output_path == "out/x"
+        assert result is None  # no poller started for a dead job
+
+    def test_attach_adopts_a_live_foreign_run(self, monkeypatch):
+        import backpropagate.ui_jobs as ui_jobs
+        from backpropagate.ui_state import TrainState
+
+        class _Mgr:
+            def status(self):
+                return {
+                    "status": "active",
+                    "job_id": "run_foreign",
+                    "phase": "training",
+                    "total_steps": 400,
+                    "step": 26,
+                }
+
+        monkeypatch.setattr(ui_jobs, "get_job_manager", lambda: _Mgr())
+        state = TrainState()
+        result = state.attach_active_job()
+        assert state.job_id == "run_foreign"
+        assert state.run_state == "active"
+        assert state.job_total_steps == 400
+        assert state.current_step == 26
+        # The reattach banner is the ONLY recovery-class banner (fix #4).
+        assert "Reattached" in state.reattach_notice
+        assert result is TrainState.poll_job
+
+    def test_attach_noop_when_nothing_running(self, monkeypatch):
+        import backpropagate.ui_jobs as ui_jobs
+        from backpropagate.ui_state import TrainState
+
+        class _Mgr:
+            def status(self):
+                return {"status": "idle"}
+
+        monkeypatch.setattr(ui_jobs, "get_job_manager", lambda: _Mgr())
+        state = TrainState()
+        assert state.attach_active_job() is None
+        assert state.job_id == "" and state.reattach_notice == ""
+
+    def test_attach_does_not_double_start_the_poller(self, monkeypatch):
+        import backpropagate.ui_jobs as ui_jobs
+        from backpropagate.ui_state import TrainState
+
+        class _Mgr:
+            def status(self):
+                return {"status": "active", "job_id": "run_x", "phase": "training"}
+
+        monkeypatch.setattr(ui_jobs, "get_job_manager", lambda: _Mgr())
+        state = TrainState()
+        state.job_id = "run_x"
+        state.run_state = "active"
+        state._poll_running = True  # a poller is already tailing
+        assert state.attach_active_job() is None
+
+
+class TestTrainStateLiveLabels:
+    """Requirement 10: heartbeat 'last step N s ago' + ETA range."""
+
+    def test_heartbeat_counts_seconds_since_last_step(self):
+        import time as _time
+
+        from backpropagate.ui_state import TrainState
+
+        state = TrainState()
+        state.run_state = "active"
+        state.job_phase = "training"
+        state._last_step_epoch = _time.time() - 3
+        state._tick_live_labels()
+        assert state.heartbeat_label.startswith("last step ")
+        assert "s ago" in state.heartbeat_label
+
+    def test_heartbeat_silent_outside_training_phase(self):
+        import time as _time
+
+        from backpropagate.ui_state import TrainState
+
+        state = TrainState()
+        state.run_state = "active"
+        state.job_phase = "loading"
+        state._last_step_epoch = _time.time() - 5
+        state._tick_live_labels()
+        assert state.heartbeat_label == ""
+
+    def test_eta_range_after_warmup(self):
+        from backpropagate.ui_state import TrainState
+
+        state = TrainState()
+        state.run_state = "active"
+        state.job_phase = "training"
+        state.job_total_steps = 100
+        state.current_step = 50
+        state._step_samples = 6
+        state._step_time_ms_ema = 1000.0  # 1 s/step → ~50 s left
+        import time as _time
+
+        state._last_step_epoch = _time.time()
+        state._tick_live_labels()
+        assert state.eta_label == "about 40 s–65 s left"
+
+    def test_eta_blank_before_warmup(self):
+        from backpropagate.ui_state import TrainState
+
+        state = TrainState()
+        state.run_state = "active"
+        state.job_phase = "training"
+        state.job_total_steps = 100
+        state.current_step = 2
+        state._step_samples = 2
+        state._step_time_ms_ema = 1000.0
+        state._tick_live_labels()
+        assert state.eta_label == ""
+
+    def test_eta_shows_after_twenty_steps_with_ten_step_logging(self):
+        """Steps are logged every 10, so step 30 of 420 has 3 samples. The
+        warm-up is ~20 steps or 5%, so the ETA must show by now (a 5-sample
+        floor hid it until step 50)."""
+        from backpropagate.ui_state import TrainState
+
+        state = TrainState()
+        state.run_state = "active"
+        state.job_phase = "training"
+        state.job_total_steps = 420
+        state.current_step = 30
+        state._step_samples = 3
+        state._step_time_ms_ema = 450.0
+        import time as _time
+
+        state._last_step_epoch = _time.time()
+        state._tick_live_labels()
+        assert state.eta_label.startswith("about ")
+
+
+def test_merge_job_history_rows_merges_jobs_tree(tmp_path):
+    """Fix #6: UI runs live under jobs/<run>/output — merged into Runs."""
+    from backpropagate.ui_state import _merge_job_history_rows
+
+    root_row = {"run_id": "cli_run", "started_at": "2026-10-01T10:00:00Z",
+                "status": "completed"}
+    job_out = tmp_path / "jobs" / "run_ui1" / "output"
+    job_out.mkdir(parents=True)
+    (job_out / "run_history.json").write_text(
+        '[{"run_id": "ui_run", "started_at": "2026-10-01T12:00:00Z", '
+        '"status": "completed"}]'
+    )
+    merged = _merge_job_history_rows([root_row], tmp_path, status=None, limit=50)
+    ids = [r["run_id"] for r in merged]
+    assert ids == ["ui_run", "cli_run"]  # started_at desc: job row first
+    # The status filter applies to the job rows (root rows arrive pre-filtered
+    # from RunHistoryManager.list_runs).
+    filtered = _merge_job_history_rows([], tmp_path, status="failed", limit=50)
+    assert filtered == []
+    filtered = _merge_job_history_rows([], tmp_path, status="completed", limit=50)
+    assert [r["run_id"] for r in filtered] == ["ui_run"]

@@ -36,6 +36,7 @@ def BpLossChart(
     height: int = 200,
     color: str = "var(--bp-teal)",
     label: str = "loss",
+    ema_label: str | None = None,
 ) -> rx.Component:
     """Reactive loss-curve chart.
 
@@ -48,17 +49,42 @@ def BpLossChart(
         height: Chart height in pixels. Defaults to 200.
         color: Stroke color CSS string (defaults to the brand teal token).
         label: dataKey label shown in the tooltip (must match the dict key).
+        ema_label: When set, draws a second line from the ``ema_label``
+            dataKey — the design-digest pairing: raw loss faint and thin,
+            the debiased EMA bold (ui-v2 requirement 10).
     """
-    return rx.recharts.line_chart(
+    lines = [
         rx.recharts.line(
             data_key=label,
             type_="monotone",
             stroke=color,
-            stroke_width=2,
+            stroke_width=1.5 if ema_label else 2,
+            stroke_opacity=0.55 if ema_label else 1.0,
             dot=False,
+            is_animation_active=False,
         ),
+    ]
+    if ema_label:
+        lines.append(
+            rx.recharts.line(
+                data_key=ema_label,
+                type_="monotone",
+                stroke=color,
+                stroke_width=2.5,
+                dot=False,
+                is_animation_active=False,
+            )
+        )
+    return rx.recharts.line_chart(
+        *lines,
         rx.recharts.x_axis(
             data_key="step",
+            # type number + dataMin/dataMax domain: with the default
+            # categorical axis a short run renders as 0..1 regardless of
+            # the real step count (P1 GPU run, 26/400 steps showed 0..1).
+            type_="number",
+            domain=["dataMin", "dataMax"],
+            allow_decimals=False,
             tick_size=4,
             tick_line=False,
             stroke="var(--bp-text-2)",
@@ -68,6 +94,7 @@ def BpLossChart(
             tick_line=False,
             stroke="var(--bp-text-2)",
             width=44,
+            domain=["auto", "auto"],
         ),
         rx.recharts.cartesian_grid(
             stroke="var(--bp-border)",
@@ -78,7 +105,7 @@ def BpLossChart(
             content_style={
                 "background": "var(--bp-surface-2)",
                 "border": "1px solid var(--bp-border)",
-                "borderRadius": "var(--bp-r-2)",
+                "borderRadius": "var(--bp-r-md)",
                 "color": "var(--bp-text)",
             },
         ),

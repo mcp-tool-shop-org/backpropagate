@@ -59,11 +59,18 @@ def _row_static(entry: dict) -> rx.Component:
         rx.text(
             entry.get("msg", ""),
             size="1",
-            style={"font_family": "var(--bp-mono)", "color": color},
+            style={
+                "font_family": "var(--bp-mono)",
+                "color": color,
+                "min_width": "0",
+                "overflow_wrap": "anywhere",
+                "word_break": "break-word",
+            },
         ),
-        gap="2",
+        gap="var(--space-2)",
         align="start",
         width="100%",
+        style={"min_width": "0"},
     )
 
 
@@ -104,9 +111,10 @@ def _row_var(entry) -> rx.Component:
             ("hf",   _msg(entry["msg"], "var(--bp-blue)")),
             _msg(entry["msg"], "var(--bp-text-2)"),
         ),
-        gap="2",
+        gap="var(--space-2)",
         align="start",
         width="100%",
+        style={"min_width": "0"},
     )
 
 
@@ -122,10 +130,19 @@ def _dot(color: str) -> rx.Component:
 
 
 def _msg(text, color: str) -> rx.Component:
+    # item-11 fix round: long paths must wrap inside the rail instead of
+    # running off its right edge. min_width:0 is the load-bearing part —
+    # flex children default to min-content width and refuse to shrink.
     return rx.text(
         text,
         size="1",
-        style={"font_family": "var(--bp-mono)", "color": color},
+        style={
+            "font_family": "var(--bp-mono)",
+            "color": color,
+            "min_width": "0",
+            "overflow_wrap": "anywhere",
+            "word_break": "break-word",
+        },
     )
 
 
@@ -164,7 +181,7 @@ def BpEventLog(
         rows = rx.vstack(
             *(_row_static(e) for e in tail),
             align="start",
-            gap="1",
+            gap="var(--space-1)",
             width="100%",
         )
         return rows
@@ -179,7 +196,7 @@ def BpEventLog(
         rx.vstack(
             rx.foreach(events[-max_n:], _row_var),
             align="start",
-            gap="1",
+            gap="var(--space-1)",
             width="100%",
         ),
     )
@@ -195,7 +212,7 @@ def BpEventLog(
                     "View full log",
                     size="1",
                     variant="ghost",
-                    style={"color": "var(--bp-muted)"},
+                    style={"color": "var(--bp-muted)", "align_self": "flex-start"},
                 ),
             ),
             rx.dialog.content(
@@ -208,7 +225,7 @@ def BpEventLog(
                     rx.vstack(
                         rx.foreach(events, _row_var),
                         align="start",
-                        gap="1",
+                        gap="var(--space-1)",
                         width="100%",
                     ),
                     type="auto",
@@ -220,12 +237,12 @@ def BpEventLog(
                         rx.button("Close", variant="soft"),
                     ),
                     justify="end",
-                    margin_top="3",
+                    margin_top="var(--space-3)",
                 ),
                 style={"max_width": "640px"},
             ),
         ),
         direction="column",
-        gap="2",
+        gap="var(--space-2)",
         width="100%",
     )

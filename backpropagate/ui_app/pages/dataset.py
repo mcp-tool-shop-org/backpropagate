@@ -16,34 +16,20 @@ import reflex as rx
 from backpropagate.ui_state import DatasetState
 
 from ..chrome import BpFooter, BpHeader, BpLeftNav, BpSideRail
+from ..components.field import FIELD_STYLE as _FIELD_STYLE
+from ..components.field import bp_label as _label
 from ..components.group import Group
-
-
-def _label(text: str) -> rx.Component:
-    return rx.text(
-        text,
-        size="1",
-        style={
-            "color": "var(--bp-text-2)",
-            "font_size": "11px",
-            "margin_bottom": "4px",
-        },
-    )
+from ..components.icon import bp_icon
 
 
 def _upload_group() -> rx.Component:
     return Group(
         rx.upload(
             rx.flex(
-                rx.image(
-                    src="/icons/upload.svg",
-                    width="32px",
-                    height="32px",
-                    # FRONTEND-B-005: CSS ``color`` is inert on an ``<img>``
-                    # SVG; drop it and keep only the centering margin.
-                    style={"margin": "0 auto"},
-                    alt="",
-                ),
+                # ui-v2 P1 redesign pass 2: inlined (bp_icon) so the glyph
+                # follows --bp-muted; as <img> its currentColor bake was
+                # black on every theme (FRONTEND-B-005).
+                bp_icon("upload", 32, color="var(--bp-muted)"),
                 rx.text(
                     "Drop a JSONL / Alpaca / ShareGPT file here, or click to browse.",
                     size="2",
@@ -80,9 +66,9 @@ def _upload_group() -> rx.Component:
                 rx.upload_files(upload_id="dataset_upload")
             ),
             style={
-                "background": "var(--bp-surface-2)",
+                "background": "var(--bp-field-bg)",
                 "border": "1px dashed var(--bp-border-2)",
-                "border_radius": "var(--bp-r-3)",
+                "border_radius": "var(--bp-r-md)",
                 "cursor": "pointer",
             },
         ),
@@ -148,7 +134,7 @@ def _format_group() -> rx.Component:
             rx.select.root(
                 rx.select.trigger(
                     placeholder="auto",
-                    style={"width": "100%"},
+                    style={**_FIELD_STYLE, "width": "100%"},
                     aria_label="Dataset format override — auto / ShareGPT / Alpaca / OpenAI / JSONL",
                 ),
                 rx.select.content(
@@ -234,7 +220,7 @@ def _preview_group() -> rx.Component:
                         style={
                             "background": "var(--bp-surface-2)",
                             "border": "1px solid var(--bp-border)",
-                            "border_radius": "var(--bp-r-2)",
+                            "border_radius": "var(--bp-r-md)",
                             "width": "100%",
                         },
                     ),
@@ -342,6 +328,7 @@ def _filter_group() -> rx.Component:
                     type="number",
                     size="2",
                     class_name="bp-num",
+                    style={**_FIELD_STYLE, "width": "100%"},
                     aria_label="Minimum tokens per record (filter)",
                 ),
                 rx.cond(
@@ -365,6 +352,7 @@ def _filter_group() -> rx.Component:
                     type="number",
                     size="2",
                     class_name="bp-num",
+                    style={**_FIELD_STYLE, "width": "100%"},
                     aria_label="Maximum tokens per record (filter)",
                 ),
                 rx.cond(
@@ -399,8 +387,12 @@ def dataset_page() -> rx.Component:
                 rx.flex(
                     rx.heading(
                         "Dataset",
-                        size="6",
-                        style={"color": "var(--bp-text)", "font_weight": "500"},
+                        size="7",
+                        style={
+                            "color": "var(--bp-text)",
+                            "font_weight": "600",
+                            "letter_spacing": "-0.02em",
+                        },
                     ),
                     rx.text(
                         "Upload a dataset, auto-detect the format, preview "
@@ -414,9 +406,9 @@ def dataset_page() -> rx.Component:
                     _stats_group(),
                     _filter_group(),
                     direction="column",
-                    gap="4",
-                    padding="6",
-                    max_width="780px",
+                    gap="6",
+                    padding="7",
+                    max_width="1080px",
                 ),
                 flex_grow="1",
                 style={"height": "100%"},

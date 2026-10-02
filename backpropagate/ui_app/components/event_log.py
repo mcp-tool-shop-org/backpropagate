@@ -59,11 +59,18 @@ def _row_static(entry: dict) -> rx.Component:
         rx.text(
             entry.get("msg", ""),
             size="1",
-            style={"font_family": "var(--bp-mono)", "color": color},
+            style={
+                "font_family": "var(--bp-mono)",
+                "color": color,
+                "min_width": "0",
+                "overflow_wrap": "anywhere",
+                "word_break": "break-word",
+            },
         ),
         gap="2",
         align="start",
         width="100%",
+        style={"min_width": "0"},
     )
 
 
@@ -107,6 +114,7 @@ def _row_var(entry) -> rx.Component:
         gap="2",
         align="start",
         width="100%",
+        style={"min_width": "0"},
     )
 
 
@@ -122,10 +130,19 @@ def _dot(color: str) -> rx.Component:
 
 
 def _msg(text, color: str) -> rx.Component:
+    # item-11 fix round: long paths must wrap inside the rail instead of
+    # running off its right edge. min_width:0 is the load-bearing part —
+    # flex children default to min-content width and refuse to shrink.
     return rx.text(
         text,
         size="1",
-        style={"font_family": "var(--bp-mono)", "color": color},
+        style={
+            "font_family": "var(--bp-mono)",
+            "color": color,
+            "min_width": "0",
+            "overflow_wrap": "anywhere",
+            "word_break": "break-word",
+        },
     )
 
 

@@ -1,15 +1,15 @@
-"""Train page — ``/`` — the single-run surface.
+"""Train page — ``/`` — the single-run surface (ui-v2 P1 redesign).
 
-Component tree per design digest §3:
+The Director's layout bar:
 
-- Hero heading + subtitle
-- Recovery banners (when applicable)
-- Group "Model"            — HF model id + quantization
-- Group "Training shape"   — steps + batch + learning rate
-- Group "LoRA tuning"      — r + alpha + dropout + target modules
-- Group "Dataset"          — path + format auto-detect
-- Group "Advanced" (collapsed) — gpu safety + run name + flags
-- Start / Stop button row
+- Content lives in rounded cards (14px radius, soft shadow) on the page
+  background — Model, Dataset, Training shape, LoRA tuning, Advanced.
+- Two-column grid at desktop widths (no half-empty screen beside a crowd);
+  one spacing scale (4/8/12/16/24/32/48) everywhere.
+- A live run gets its own progress CARD: large "26 / 400" counter, rounded
+  progress bar, heartbeat ("last step 2 s ago") and ETA range, loss + EMA.
+  The loss chart (raw faint, smoothed bold) sits in its own card.
+- Config fields lock while a run is active (they never re-target mid-run).
 """
 
 from __future__ import annotations
@@ -19,54 +19,41 @@ import reflex as rx
 from backpropagate.ui_state import TrainState
 
 from ..chrome import BpFooter, BpHeader, BpLeftNav, BpSideRail
-from ..components.group import Group
+from ..components.field import FIELD_STYLE, bp_err_text, bp_field, bp_label
+from ..components.group import Group, _card_style
+from ..components.loss_chart import BpLossChart
 from ..components.recovery_banner import BpRecoveryBanner
 
-
-def _label(text: str) -> rx.Component:
-    """Tiny labelled control eyebrow."""
-    return rx.text(
-        text,
-        size="1",
-        style={
-            "color": "var(--bp-text-2)",
-            "font_size": "11px",
-            "margin_bottom": "4px",
-        },
-    )
+# Field chrome is shared via components/field.py (ui-v2 P1 redesign pass 2);
+# the private aliases keep this page's existing call sites + tests stable.
+_FIELD_STYLE = FIELD_STYLE
+_label = bp_label
+_err_text = bp_err_text
+_field = bp_field
 
 
 def _model_group() -> rx.Component:
     return Group(
         rx.grid(
-            rx.flex(
-                _label("HuggingFace model id"),
+            _field(
+                "HuggingFace model id",
                 rx.input(
                     placeholder="meta-llama/Llama-3.1-8B",
                     default_value=TrainState.model,
                     on_change=TrainState.set_model,
                     size="2",
-                    style={"width": "100%"},
+                    disabled=TrainState.form_disabled,
+                    style={**_FIELD_STYLE, "width": "100%"},
                     aria_label="HuggingFace model id",
                 ),
-                rx.cond(
-                    TrainState.model_error != "",
-                    rx.text(
-                        TrainState.model_error,
-                        size="1",
-                        style={"color": "var(--bp-peach)", "font_size": "11px"},
-                    ),
-                    rx.fragment(),
-                ),
-                direction="column",
-                width="100%",
+                TrainState.model_error,
             ),
-            rx.flex(
-                _label("Quantization"),
+            _field(
+                "Quantization",
                 rx.select.root(
                     rx.select.trigger(
                         placeholder="4-bit",
-                        style={"width": "100%"},
+                        style={**_FIELD_STYLE, "width": "100%"},
                         aria_label="Quantization level — 4-bit, 8-bit, or 16-bit",
                     ),
                     rx.select.content(
@@ -76,36 +63,22 @@ def _model_group() -> rx.Component:
                     ),
                     value=TrainState.quantization,
                     on_change=TrainState.set_quantization,
+                    disabled=TrainState.form_disabled,
                 ),
-                direction="column",
-                width="100%",
             ),
             columns="2fr 1fr",
-            gap="3",
+            gap="5",
             width="100%",
         ),
         title="Model",
     )
 
 
-def _err_text(error_var) -> rx.Component:
-    """Inline error label — peach text, 11px, only renders when non-empty."""
-    return rx.cond(
-        error_var != "",
-        rx.text(
-            error_var,
-            size="1",
-            style={"color": "var(--bp-peach)", "font_size": "11px"},
-        ),
-        rx.fragment(),
-    )
-
-
 def _training_shape_group() -> rx.Component:
     return Group(
         rx.grid(
-            rx.flex(
-                _label("Steps"),
+            _field(
+                "Steps",
                 rx.input(
                     placeholder="100",
                     value=TrainState.steps.to_string(),
@@ -113,42 +86,42 @@ def _training_shape_group() -> rx.Component:
                     type="number",
                     size="2",
                     class_name="bp-num",
+                    disabled=TrainState.form_disabled,
+                    style=_FIELD_STYLE,
                     aria_label="Number of training steps",
                 ),
-                _err_text(TrainState.steps_error),
-                direction="column",
-                width="100%",
+                TrainState.steps_error,
             ),
-            rx.flex(
-                _label("Batch size"),
+            _field(
+                "Batch size",
                 rx.input(
                     placeholder="auto",
                     value=TrainState.batch_size,
                     on_change=TrainState.set_batch_size,
                     size="2",
                     class_name="bp-num",
+                    disabled=TrainState.form_disabled,
+                    style=_FIELD_STYLE,
                     aria_label="Batch size (number or auto)",
                 ),
-                _err_text(TrainState.batch_size_error),
-                direction="column",
-                width="100%",
+                TrainState.batch_size_error,
             ),
-            rx.flex(
-                _label("Learning rate"),
+            _field(
+                "Learning rate",
                 rx.input(
                     placeholder="2e-4",
                     value=TrainState.learning_rate.to_string(),
                     on_change=TrainState.set_learning_rate,
                     size="2",
                     class_name="bp-num",
+                    disabled=TrainState.form_disabled,
+                    style=_FIELD_STYLE,
                     aria_label="Learning rate",
                 ),
-                _err_text(TrainState.learning_rate_error),
-                direction="column",
-                width="100%",
+                TrainState.learning_rate_error,
             ),
             columns="repeat(3, 1fr)",
-            gap="3",
+            gap="5",
             width="100%",
         ),
         title="Training shape",
@@ -158,8 +131,8 @@ def _training_shape_group() -> rx.Component:
 def _lora_group() -> rx.Component:
     return Group(
         rx.grid(
-            rx.flex(
-                _label("LoRA rank"),
+            _field(
+                "LoRA rank",
                 rx.input(
                     placeholder="16",
                     value=TrainState.lora_r.to_string(),
@@ -167,57 +140,56 @@ def _lora_group() -> rx.Component:
                     type="number",
                     size="2",
                     class_name="bp-num",
+                    disabled=TrainState.form_disabled,
+                    style=_FIELD_STYLE,
                     aria_label="LoRA rank (r)",
                 ),
-                _err_text(TrainState.lora_r_error),
-                direction="column",
-                width="100%",
+                TrainState.lora_r_error,
             ),
-            rx.flex(
-                _label("LoRA alpha"),
+            _field(
+                "LoRA alpha",
                 rx.input(
                     placeholder="32",
                     value=TrainState.lora_alpha.to_string(),
                     on_change=TrainState.set_lora_alpha,
                     size="2",
                     class_name="bp-num",
+                    disabled=TrainState.form_disabled,
+                    style=_FIELD_STYLE,
                     aria_label="LoRA alpha",
                 ),
-                _err_text(TrainState.lora_alpha_error),
-                direction="column",
-                width="100%",
+                TrainState.lora_alpha_error,
             ),
-            rx.flex(
-                _label("Dropout"),
+            _field(
+                "Dropout",
                 rx.input(
                     placeholder="0.05",
                     value=TrainState.lora_dropout.to_string(),
                     on_change=TrainState.set_lora_dropout,
                     size="2",
                     class_name="bp-num",
+                    disabled=TrainState.form_disabled,
+                    style=_FIELD_STYLE,
                     aria_label="LoRA dropout (0 to 1)",
                 ),
-                _err_text(TrainState.lora_dropout_error),
-                direction="column",
-                width="100%",
+                TrainState.lora_dropout_error,
             ),
             columns="repeat(3, 1fr)",
-            gap="3",
+            gap="5",
             width="100%",
         ),
-        rx.flex(
-            _label("Target modules (comma-separated)"),
+        _field(
+            "Target modules (comma-separated)",
             rx.input(
                 placeholder="q_proj, k_proj, v_proj, o_proj",
                 value=TrainState.target_modules,
                 on_change=TrainState.set_target_modules,
                 size="2",
-                style={"width": "100%"},
+                disabled=TrainState.form_disabled,
+                style={**_FIELD_STYLE, "width": "100%"},
                 aria_label="LoRA target modules — comma-separated attention layer names",
             ),
-            _err_text(TrainState.target_modules_error),
-            direction="column",
-            width="100%",
+            TrainState.target_modules_error,
         ),
         title="LoRA tuning",
     )
@@ -225,27 +197,18 @@ def _lora_group() -> rx.Component:
 
 def _dataset_group() -> rx.Component:
     return Group(
-        rx.flex(
-            _label("Dataset path"),
+        _field(
+            "Dataset path",
             rx.input(
                 placeholder="path/to/dataset.jsonl",
                 default_value=TrainState.dataset_path,
                 on_change=TrainState.set_dataset_path,
                 size="2",
-                style={"width": "100%"},
+                disabled=TrainState.form_disabled,
+                style={**_FIELD_STYLE, "width": "100%"},
                 aria_label="Path to training dataset (JSONL)",
             ),
-            rx.cond(
-                TrainState.dataset_path_error != "",
-                rx.text(
-                    TrainState.dataset_path_error,
-                    size="1",
-                    style={"color": "var(--bp-peach)", "font_size": "11px"},
-                ),
-                rx.fragment(),
-            ),
-            direction="column",
-            width="100%",
+            TrainState.dataset_path_error,
         ),
         rx.text(
             "Format auto-detected from contents: Alpaca · ShareGPT · OpenAI · raw JSONL.",
@@ -256,105 +219,354 @@ def _dataset_group() -> rx.Component:
     )
 
 
-def _recovery_banners() -> rx.Component:
-    """Most-recent ``ok`` / ``warn`` event banners (FRONTEND-A-004, v1.4 Wave 2).
+def _advanced_group() -> rx.Component:
+    return Group(
+        rx.grid(
+            _field(
+                "GPU temp threshold (°C)",
+                rx.input(
+                    placeholder="85",
+                    value=TrainState.gpu_temp_threshold.to_string(),
+                    on_change=TrainState.set_gpu_temp_threshold,
+                    size="2",
+                    class_name="bp-num",
+                    disabled=TrainState.form_disabled,
+                    style=_FIELD_STYLE,
+                    aria_label=(
+                        "GPU temperature threshold in Celsius "
+                        "(pause training above this)"
+                    ),
+                ),
+                TrainState.gpu_temp_threshold_error,
+            ),
+            _field(
+                "W&B run name",
+                rx.input(
+                    placeholder="(optional)",
+                    value=TrainState.wandb_run_name,
+                    on_change=TrainState.set_wandb_run_name,
+                    size="2",
+                    disabled=TrainState.form_disabled,
+                    style=_FIELD_STYLE,
+                    aria_label="Weights and Biases run name (optional)",
+                ),
+                TrainState.wandb_run_name_error,
+            ),
+            columns="repeat(2, 1fr)",
+            gap="5",
+            width="100%",
+        ),
+        rx.flex(
+            rx.checkbox(
+                "Gradient checkpointing",
+                checked=TrainState.gradient_checkpointing,
+                on_change=TrainState.set_gradient_checkpointing,
+                disabled=TrainState.form_disabled,
+            ),
+            rx.checkbox(
+                "Flash attention",
+                checked=TrainState.flash_attention,
+                on_change=TrainState.set_flash_attention,
+                disabled=TrainState.form_disabled,
+            ),
+            direction="row",
+            gap="5",
+        ),
+        title="Advanced",
+        collapsible=True,
+        default_open=False,
+    )
 
-    The Train page surfaces the latest recovery-class event as an inline
-    ``BpRecoveryBanner``. Pre-v1.4 the component existed but no page
-    rendered it — the docstring at the top of this module promised
-    "Recovery banners (when applicable)" but the body never wired one.
 
-    Rendering rules:
+def _reattach_banner() -> rx.Component:
+    """Shown ONLY when this page adopted a run it didn't start (fix-round).
 
-    - ``ok``-level event present → render the green "ok" banner. Operator
-      sees the good-news recovery (e.g. trainer resumed from an OOM
-      bisect, GPU temp dropped below threshold, checkpoint written after
-      a near-miss).
-    - ``warn``-level event present → render the amber "warn" banner.
-      Operator sees the heads-up condition (e.g. GPU temp approaching
-      threshold, dataset row skipped, batch auto-shrunk for VRAM).
-    - Both can render simultaneously — they convey different signals and
-      the operator benefits from seeing both.
-    - ``info``-level events are NOT surfaced as banners (would flood the
-      page during a normal run). They remain in the side-rail event log
-      via ``BpEventLog`` for operators who want the full timeline.
-    - ``err``-level events are NOT surfaced here either. HUX-01: UI-driven
-      training is an honest stub today (``start_training`` stays idle and
-      sets ``TrainState.cli_notice`` directing the operator to ``backprop
-      train`` — see ``_cli_notice``), so no ``BpErrorCallout`` is wired on
-      this page yet. The structured callout IS consumed by the /runs,
-      /models, and /run-detail pages (v1.4 Wave 2); when UI training lands,
-      err-level events on this page will route there too.
-
-    Per design digest §4e: recovery is good news, even if the original
-    event wasn't — never render in red.
-
-    FRONTEND-B-008 (Stage C polish): the outer ``rx.flex`` only renders
-    when at least one banner has content. Pre-fix the column container
-    rendered on every Train page mount even when both messages were
-    empty (no DOM children, but a 100%-width styled flex with gap
-    still emitted) — a minor layout-cost noise the Stage B audit
-    surfaced. Now the entire outer flex collapses to a fragment when
-    both messages are empty.
+    Pre-fix the page surfaced the latest ok/warn event as "Recovered." /
+    "Heads-up." banners — which fired after every NORMAL finish too, leaving
+    the stopped state with both banners up. Recovery framing belongs to
+    reattach, so the banner keys off ``reattach_notice``.
     """
     return rx.cond(
-        (TrainState.latest_recovery_ok_msg != "")
-        | (TrainState.latest_recovery_warn_msg != ""),
+        TrainState.reattach_notice != "",
+        BpRecoveryBanner(
+            variant="ok",
+            lead="Reattached.",
+            body=TrainState.reattach_notice,
+        ),
+        rx.fragment(),
+    )
+
+
+def _refusal_callout() -> rx.Component:
+    """Start-refusal banner — validation + one-job refusals land on screen."""
+    return rx.cond(
+        TrainState.job_refusal != "",
         rx.flex(
-            rx.cond(
-                TrainState.latest_recovery_ok_msg != "",
-                BpRecoveryBanner(
-                    variant="ok",
-                    lead="Recovered.",
-                    # body is the message; the lead is the canonical "this is
-                    # a recovery" tag so screen readers get the framing first.
-                    body=TrainState.latest_recovery_ok_msg,
-                ),
-                rx.fragment(),
+            rx.text(
+                TrainState.job_refusal,
+                size="2",
+                style={"color": "var(--bp-text)", "flex_grow": "1"},
             ),
-            rx.cond(
-                TrainState.latest_recovery_warn_msg != "",
-                BpRecoveryBanner(
-                    variant="warn",
-                    lead="Heads-up.",
-                    body=TrainState.latest_recovery_warn_msg,
-                ),
-                rx.fragment(),
+            rx.button(
+                "Dismiss",
+                variant="ghost",
+                color_scheme="gray",
+                size="1",
+                on_click=TrainState.dismiss_refusal,
+                style={"border_radius": "var(--bp-r-pill)"},
             ),
-            direction="column",
-            gap="2",
+            padding="4",
+            gap="3",
+            align="center",
             width="100%",
+            style={
+                "background": "var(--bp-surface)",
+                "border": "1px solid var(--bp-peach)",
+                "border_radius": "var(--bp-r-lg)",
+                "box_shadow": "var(--bp-shadow-card)",
+            },
+            role="status",
+            aria_live="polite",
+        ),
+        rx.fragment(),
+    )
+
+
+def _error_callout() -> rx.Component:
+    """Structured failure callout — code first, then message/hint."""
+    from ..components.error_callout import BpErrorCallout
+
+    return rx.cond(
+        (TrainState.run_state == "error") & (TrainState.job_error_code != ""),
+        BpErrorCallout(
+            code=TrainState.job_error_code,
+            title="Run failed",
+            message=TrainState.job_error_message,
+            hint=TrainState.job_error_hint,
+        ),
+        rx.fragment(),
+    )
+
+
+def _chip(text, *, tone: str = "teal") -> rx.Component:
+    """Small pill chip (progress card)."""
+    colors = {
+        "teal": ("var(--bp-teal)",),
+        "amber": ("var(--bp-amber)",),
+        "muted": ("var(--bp-muted)",),
+    }
+    color = colors.get(tone, colors["teal"])[0]
+    return rx.text(
+        text,
+        size="1",
+        weight="medium",
+        style={
+            "color": color,
+            "font_size": "11px",
+            "letter_spacing": "0.06em",
+            "text_transform": "uppercase",
+            "background": f"color-mix(in srgb, {color} 12%, transparent)",
+            "border": f"1px solid color-mix(in srgb, {color} 30%, transparent)",
+            "border_radius": "var(--bp-r-pill)",
+            "padding": "3px 10px",
+        },
+    )
+
+
+def _run_progress_card() -> rx.Component:
+    """The live run's own card (Design bar: large counter, rounded bar,
+    heartbeat, ETA, loss numbers).
+
+    "TRAINING" text stays in the DOM — the P1 acceptance test waits on it.
+    """
+    return rx.cond(
+        TrainState.run_state == "active",
+        rx.box(
+            # row 1: state chip, phase, run id | stalled, heartbeat, ETA
+            rx.flex(
+                _chip("TRAINING"),
+                rx.text(
+                    TrainState.job_phase,
+                    size="1",
+                    style={"color": "var(--bp-text-2)", "font_size": "12px"},
+                ),
+                rx.text(
+                    "run " + TrainState.job_id,
+                    size="1",
+                    class_name="bp-num",
+                    style={"color": "var(--bp-muted-2)", "font_size": "11px"},
+                ),
+                rx.spacer(),
+                rx.cond(
+                    TrainState.job_stalled,
+                    _chip("no progress for 2 min", tone="amber"),
+                    rx.fragment(),
+                ),
+                rx.text(
+                    TrainState.heartbeat_label,
+                    size="1",
+                    class_name="bp-num",
+                    style={"color": "var(--bp-muted)", "font_size": "12px"},
+                ),
+                rx.text(
+                    TrainState.eta_label,
+                    size="1",
+                    class_name="bp-num",
+                    style={"color": "var(--bp-muted)", "font_size": "12px"},
+                ),
+                gap="3",
+                align="center",
+                width="100%",
+                wrap="wrap",
+            ),
+            # row 2: big step counter + loss numbers
+            rx.flex(
+                rx.flex(
+                    rx.text(
+                        TrainState.current_step.to_string(),
+                        class_name="bp-num bp-tick",
+                        style={
+                            "color": "var(--bp-text)",
+                            "font_size": "34px",
+                            "font_weight": "600",
+                            "letter_spacing": "-0.02em",
+                            "line_height": "1",
+                        },
+                    ),
+                    rx.text(
+                        " / " + TrainState.job_total_steps.to_string(),
+                        class_name="bp-num",
+                        style={
+                            "color": "var(--bp-muted)",
+                            "font_size": "18px",
+                            "line_height": "1",
+                        },
+                    ),
+                    direction="row",
+                    align="baseline",
+                    gap="1",
+                ),
+                rx.spacer(),
+                rx.flex(
+                    rx.flex(
+                        _label("loss"),
+                        rx.text(
+                            TrainState.loss_label,
+                            class_name="bp-num",
+                            style={
+                                "color": "var(--bp-text)",
+                                "font_size": "18px",
+                                "line_height": "1.1",
+                            },
+                        ),
+                        direction="column",
+                        align="end",
+                        gap="1",
+                    ),
+                    rx.flex(
+                        _label("smoothed"),
+                        rx.text(
+                            TrainState.ema_loss_label,
+                            class_name="bp-num",
+                            style={
+                                "color": "var(--bp-teal)",
+                                "font_size": "18px",
+                                "font_weight": "600",
+                                "line_height": "1.1",
+                            },
+                        ),
+                        direction="column",
+                        align="end",
+                        gap="1",
+                    ),
+                    direction="row",
+                    gap="5",
+                    align="center",
+                ),
+                direction="row",
+                align="center",
+                width="100%",
+            ),
+            # row 3: the rounded progress bar (10px pill track + teal fill)
+            rx.box(
+                rx.box(
+                    width=TrainState.step_progress_pct,
+                    height="100%",
+                    background="var(--bp-teal)",
+                    border_radius="var(--bp-r-pill)",
+                    style={"transition": "width 0.4s ease-out"},
+                ),
+                width="100%",
+                height="10px",
+                margin_top="4",
+                background="var(--bp-surface-3)",
+                border_radius="var(--bp-r-pill)",
+                overflow="hidden",
+                role="progressbar",
+                aria_label="Training progress",
+            ),
+            padding="5",
+            width="100%",
+            style={
+                **_card_style(),
+                "border": "1px solid color-mix(in srgb, var(--bp-teal) 30%, var(--bp-border))",
+            },
+            role="status",
+            aria_live="polite",
+        ),
+        rx.fragment(),
+    )
+
+
+def _loss_chart_card() -> rx.Component:
+    """Loss in its own card — raw (faint) + debiased EMA (bold)."""
+    return rx.cond(
+        TrainState.loss_history.length() > 0,
+        rx.box(
+            rx.flex(
+                rx.text(
+                    "Training loss",
+                    size="3",
+                    weight="medium",
+                    style={"color": "var(--bp-text)", "font_size": "16px"},
+                ),
+                rx.spacer(),
+                rx.text(
+                    "raw faint · smoothed bold",
+                    size="1",
+                    style={"color": "var(--bp-muted)", "font_size": "11px"},
+                ),
+                align="baseline",
+                width="100%",
+            ),
+            rx.box(
+                BpLossChart(
+                    TrainState.loss_chart_data,
+                    height=170,
+                    label="loss",
+                    ema_label="ema",
+                ),
+                margin_top="3",
+                width="100%",
+            ),
+            padding="5",
+            width="100%",
+            style=_card_style(),
         ),
         rx.fragment(),
     )
 
 
 def _next_steps_panel() -> rx.Component:
-    """Post-run affordances — FRONTEND-10 (Wave 6b).
-
-    Surfaces after a run reaches a terminal state (``done`` or ``error``).
-    Hidden in idle / loading / active to avoid cognitive noise during a
-    live run. The links route to the relevant surface — clicking "Export
-    to GGUF" navigates to /export with the format pre-selected (the
-    pre-select is a state hand-off; the link sets the route, the export
-    page picks up TrainState's last run_id on mount in a follow-up wave).
-
-    Per Wave 5 audit FRONTEND-F-010: after a run completes, surface
-    affordances: "Export to GGUF", "Push to HF Hub", "Register with
-    Ollama", "View checkpoints", "Start another run".
-    """
+    """Post-run affordances — export / view checkpoints / start another."""
     return rx.cond(
         TrainState.run_complete,
-        rx.flex(
+        rx.box(
             rx.text(
                 "Run complete · what next?",
-                size="2",
-                style={
-                    "color": "var(--bp-text-2)",
-                    "text_transform": "uppercase",
-                    "letter_spacing": "0.06em",
-                    "font_size": "11px",
-                },
+                size="3",
+                weight="medium",
+                style={"color": "var(--bp-text)", "font_size": "16px"},
             ),
             rx.flex(
                 rx.link(
@@ -363,6 +575,7 @@ def _next_steps_panel() -> rx.Component:
                         variant="soft",
                         color_scheme="teal",
                         size="2",
+                        style={"border_radius": "var(--bp-r-pill)"},
                         aria_label="Convert this adapter to GGUF for Ollama or llama.cpp",
                     ),
                     href="/export",
@@ -373,6 +586,7 @@ def _next_steps_panel() -> rx.Component:
                         variant="soft",
                         color_scheme="teal",
                         size="2",
+                        style={"border_radius": "var(--bp-r-pill)"},
                         aria_label="Push the trained adapter to a HuggingFace repo",
                     ),
                     href="/export",
@@ -383,6 +597,7 @@ def _next_steps_panel() -> rx.Component:
                         variant="soft",
                         color_scheme="teal",
                         size="2",
+                        style={"border_radius": "var(--bp-r-pill)"},
                         aria_label="Register the model with the local Ollama daemon",
                     ),
                     href="/export",
@@ -393,6 +608,7 @@ def _next_steps_panel() -> rx.Component:
                         variant="soft",
                         color_scheme="gray",
                         size="2",
+                        style={"border_radius": "var(--bp-r-pill)"},
                         aria_label="Browse this run's checkpoint files in the runs page",
                     ),
                     href="/runs",
@@ -402,28 +618,36 @@ def _next_steps_panel() -> rx.Component:
                     variant="ghost",
                     color_scheme="teal",
                     size="2",
-                    # CLIUI-B-001: routes through the same honesty-floor handler
-                    # — surfaces the "use `backprop train`" notice rather than
-                    # faking a new run.
                     on_click=TrainState.start_training,
-                    aria_label="Start another training run — use the backprop train shell command",
+                    style={"border_radius": "var(--bp-r-pill)"},
+                    aria_label="Start another run",
                 ),
                 direction="row",
-                gap="2",
+                gap="3",
                 wrap="wrap",
+                margin_top="2",
             ),
-            direction="column",
-            gap="3",
-            padding="4",
+            rx.cond(
+                TrainState.job_output_path != "",
+                rx.text(
+                    "Saved to: " + TrainState.job_output_path,
+                    size="1",
+                    class_name="bp-num",
+                    style={
+                        "color": "var(--bp-muted)",
+                        "font_size": "11px",
+                        "margin_top": "8px",
+                        "overflow_wrap": "anywhere",
+                    },
+                ),
+                rx.fragment(),
+            ),
+            padding="5",
+            width="100%",
             style={
-                "background": "var(--bp-surface-2)",
-                "border": "1px solid var(--bp-teal)",
-                "border_radius": "var(--bp-r-2)",
+                **_card_style(),
+                "border": "1px solid color-mix(in srgb, var(--bp-seafoam) 35%, var(--bp-border))",
             },
-            # FRONTEND-B-014-EXTENDED (Stage C accessibility): tag the post-run
-            # affordances as a labeled region so screen readers announce the
-            # context when the operator tabs into the cluster after the run
-            # completes.
             role="region",
             aria_label="Run complete — next steps",
         ),
@@ -431,98 +655,36 @@ def _next_steps_panel() -> rx.Component:
     )
 
 
-def _cli_notice() -> rx.Component:
-    """Inline "use the CLI" notice — CLIUI-B-001 (Stage C UI honesty floor).
+def _start_stop_button() -> rx.Component:
+    """Start / Stop-and-save toggle (ui-v2 P1).
 
-    Surfaces ``TrainState.cli_notice`` (set when the operator clicks the
-    "coming soon" Start button) as a neutral, NON-error callout pointing at
-    the ``backprop train`` shell command. Wrapped in role=status / aria_live
-    so screen readers announce it on click — mirrors the export-page hub-status
-    accessibility wiring. Renders nothing until the notice is set.
+    While a run is active the primary action becomes the cooperative
+    "Stop and save checkpoint" — never an immediate kill. WCAG 2.5.3: the
+    accessible name CONTAINS the visible text, exactly, so assistive tech
+    (and the acceptance test's ``get_by_role``) match the rendered label.
     """
     return rx.cond(
-        TrainState.cli_notice != "",
-        rx.box(
-            rx.flex(
-                rx.text(
-                    TrainState.cli_notice,
-                    size="1",
-                    style={
-                        "color": "var(--bp-text-2)",
-                        "font_size": "12px",
-                        "flex_grow": "1",
-                    },
-                ),
-                direction="row",
-                align="center",
-                gap="2",
-                padding="3",
-                style={
-                    "background": "var(--bp-surface-2)",
-                    "border": "1px solid var(--bp-border)",
-                    "border_radius": "var(--bp-r-2)",
-                },
-            ),
-            role="status",
-            aria_live="polite",
-            aria_atomic="true",
-            margin_top="2",
+        TrainState.run_state == "active",
+        rx.button(
+            "Stop and save checkpoint",
+            variant="soft",
+            color_scheme="red",
+            size="3",
+            on_click=TrainState.stop_training,
+            disabled=TrainState.stop_requested,
+            style={"border_radius": "var(--bp-r-pill)", "min_width": "220px"},
+            aria_label="Stop and save checkpoint",
         ),
-        rx.fragment(),
-    )
-
-
-def _advanced_group() -> rx.Component:
-    return Group(
-        rx.grid(
-            rx.flex(
-                _label("GPU temp threshold (°C)"),
-                rx.input(
-                    placeholder="85",
-                    value=TrainState.gpu_temp_threshold.to_string(),
-                    on_change=TrainState.set_gpu_temp_threshold,
-                    size="2",
-                    class_name="bp-num",
-                    aria_label="GPU temperature threshold in Celsius (pause training above this)",
-                ),
-                _err_text(TrainState.gpu_temp_threshold_error),
-                direction="column",
-                width="100%",
-            ),
-            rx.flex(
-                _label("W&B run name"),
-                rx.input(
-                    placeholder="(optional)",
-                    value=TrainState.wandb_run_name,
-                    on_change=TrainState.set_wandb_run_name,
-                    size="2",
-                    aria_label="Weights and Biases run name (optional)",
-                ),
-                _err_text(TrainState.wandb_run_name_error),
-                direction="column",
-                width="100%",
-            ),
-            columns="repeat(2, 1fr)",
-            gap="3",
-            width="100%",
+        rx.button(
+            "Start training",
+            variant="solid",
+            color_scheme="teal",
+            size="3",
+            disabled=TrainState.form_disabled,
+            style={"border_radius": "var(--bp-r-pill)", "min_width": "220px"},
+            on_click=TrainState.start_training,
+            aria_label="Start training",
         ),
-        rx.flex(
-            rx.checkbox(
-                "Gradient checkpointing",
-                checked=TrainState.gradient_checkpointing,
-                on_change=TrainState.set_gradient_checkpointing,
-            ),
-            rx.checkbox(
-                "Flash attention",
-                checked=TrainState.flash_attention,
-                on_change=TrainState.set_flash_attention,
-            ),
-            direction="row",
-            gap="4",
-        ),
-        title="Advanced",
-        collapsible=True,
-        default_open=False,
     )
 
 
@@ -536,63 +698,67 @@ def train_page() -> rx.Component:
                 rx.flex(
                     rx.heading(
                         "Single run",
-                        size="6",
-                        style={"color": "var(--bp-text)", "font_weight": "500"},
+                        size="7",
+                        style={
+                            "color": "var(--bp-text)",
+                            "font_weight": "600",
+                            "letter_spacing": "-0.02em",
+                        },
                     ),
                     rx.text(
                         "Configure a one-shot fine-tuning run. Sensible defaults "
-                        "for Qwen 2.5 7B on a 16 GB GPU; tweak any field below.",
+                        "for Qwen 2.5 7B on a 32 GB GPU; smaller cards work at "
+                        "lower batch sizes. Runs in a separate process — the "
+                        "rail on the right shows live progress.",
                         size="2",
                         style={"color": "var(--bp-muted)"},
                     ),
-                    # FRONTEND-A-004 (v1.4 Wave 2): wire BpRecoveryBanner so
-                    # the most-recent ok / warn event surfaces inline above
-                    # the form. Closes the docstring promise at the top of
-                    # this module ("Recovery banners (when applicable)") and
-                    # gets the canonical recovery surface that design digest
-                    # §4e specified onto the Train page.
-                    _recovery_banners(),
-                    _model_group(),
-                    _training_shape_group(),
-                    _lora_group(),
-                    _dataset_group(),
-                    _advanced_group(),
-                    _next_steps_panel(),
-                    # CLIUI-B-001 (Stage C UI honesty floor): UI-driven training
-                    # is not wired yet (the real background-task hookup is the
-                    # feature pass). The Start button is visibly marked
-                    # "coming soon" and clicking it surfaces an inline notice
-                    # pointing at the `backprop train` shell command rather than
-                    # faking a loading spinner / a run that never starts. The
-                    # config form + dataset preview above stay fully functional.
-                    rx.flex(
-                        rx.button(
-                            rx.text("Start training"),
-                            rx.badge(
-                                "coming soon",
-                                color_scheme="gray",
-                                variant="soft",
-                                size="1",
-                            ),
-                            variant="solid",
-                            color_scheme="teal",
-                            size="3",
-                            on_click=TrainState.start_training,
-                            aria_label=(
-                                "Start training — web-UI training ships in a "
-                                "future release; use the backprop train shell "
-                                "command for now"
-                            ),
+                    _reattach_banner(),
+                    _refusal_callout(),
+                    _error_callout(),
+                    _run_progress_card(),
+                    # Two-column form grid on wide screens; stacks at narrow.
+                    rx.grid(
+                        rx.flex(
+                            _model_group(),
+                            _dataset_group(),
+                            direction="column",
+                            gap="6",
+                            width="100%",
+                            align="start",
                         ),
+                        rx.flex(
+                            _training_shape_group(),
+                            _lora_group(),
+                            direction="column",
+                            gap="6",
+                            width="100%",
+                            align="start",
+                        ),
+                        columns=rx.breakpoints(initial="1", md="2"),
+                        gap="6",
+                        width="100%",
+                        align="start",
+                    ),
+                    _advanced_group(),
+                    _loss_chart_card(),
+                    _next_steps_panel(),
+                    rx.flex(
+                        _start_stop_button(),
                         gap="3",
                         margin_top="2",
                         align="center",
+                        justify="center",
                     ),
-                    _cli_notice(),
                     direction="column",
-                    gap="4",
-                    padding="6",
-                    max_width="780px",
+                    gap="6",
+                    padding="7",
+                    max_width="1080px",
+                    width="100%",
+                    on_mount=[
+                        TrainState.refresh_gpu,
+                        TrainState.attach_active_job,
+                    ],
                 ),
                 flex_grow="1",
                 style={"height": "100%"},

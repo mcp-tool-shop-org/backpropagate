@@ -414,25 +414,30 @@ class TestGroup:
         assert "AccordionRoot" not in _node_types(comp)
 
     def test_collapsible_open_by_default(self):
+        """ui-v2 P1: native <details> disclosure (replaces the Radix teal bar)."""
         from backpropagate.ui_app.components.group import Group
 
         comp = Group(rx.text("x"), title="Advanced", collapsible=True, default_open=True)
-        assert "AccordionRoot" in _node_types(comp)
+        assert "AccordionRoot" not in _node_types(comp)
+        assert "Details" in _node_types(comp)
         rendered = _render(comp)
-        assert 'defaultValue:\\"Advanced\\"' in rendered or "Advanced" in rendered
+        assert "Advanced" in rendered
+        assert "open" in rendered  # the boolean attr is present
 
-    def test_collapsible_closed_has_empty_default_value(self):
+    def test_collapsible_closed_has_no_open_attr(self):
         from backpropagate.ui_app.components.group import Group
 
         comp = Group(rx.text("x"), title="Advanced", collapsible=True, default_open=False)
-        assert comp.default_value is not None
-        assert str(comp.default_value).strip('"') == ""
+        assert "Details" in _node_types(comp)
+        rendered = _render(comp)
+        # boolean attribute absent when collapsed by default
+        assert 'open: "true"' not in rendered
 
-    def test_collapsible_without_title_uses_section_value(self):
+    def test_collapsible_without_title_uses_empty_eyebrow(self):
         from backpropagate.ui_app.components.group import Group
 
         comp = Group(rx.text("x"), collapsible=True)
-        assert "section" in _render(comp)
+        assert "Details" in _node_types(comp)
 
 
 class TestLossChart:
@@ -457,15 +462,17 @@ class TestLossChart:
 class TestRecoveryBanner:
     @pytest.mark.parametrize(
         ("variant", "token", "icon"),
-        [("info", "--bp-blue", "info.svg"), ("warn", "--bp-amber", "info.svg"),
-         ("ok", "--bp-seafoam", "check.svg"), ("nonsense", "--bp-blue", "info.svg")],
+        [("info", "--bp-blue", "info"), ("warn", "--bp-amber", "info"),
+         ("ok", "--bp-seafoam", "check"), ("nonsense", "--bp-blue", "info")],
     )
     def test_variant_colour_and_icon(self, variant, token, icon):
         from backpropagate.ui_app.components.recovery_banner import BpRecoveryBanner
 
         comp = BpRecoveryBanner(variant=variant, lead="Lead", body="Body")
         rendered = _render(comp)
-        assert token in rendered and icon in rendered
+        # icon inlined via bp_icon (data-icon marker — rx.html nests it in
+        # dangerouslySetInnerHTML, so it renders triple-backslash-escaped)
+        assert token in rendered and f'data-icon=\\\\\\"{icon}\\\\\\"' in rendered
         assert {"Lead", "Body"} <= _texts(comp)
         # a11y: polite live region
         assert "polite" in rendered and "status" in rendered
@@ -507,12 +514,16 @@ class TestChrome:
     def test_active_nav_row_is_aria_current_and_others_are_not(self):
         from backpropagate.ui_app.chrome import _nav_link
 
-        active = _render(_nav_link("runs", "Runs", "/runs", "/i.svg", "runs"))
-        inactive = _render(_nav_link("runs", "Runs", "/runs", "/i.svg", "train"))
+        active = _render(_nav_link("runs", "Runs", "/runs", "records", "runs"))
+        inactive = _render(_nav_link("runs", "Runs", "/runs", "records", "train"))
         assert "aria-current" in active and "page" in active
         assert "aria-current" not in inactive
-        assert "inset 3px 0 0 var(--bp-teal)" in active
-        assert "inset 3px 0 0" not in inactive
+        # ui-v2 P1 redesign: the active page is a filled rounded PILL,
+        # not the old teal inset bar; the icon is inlined (data-icon).
+        assert "--bp-r-pill" in active
+        assert "--bp-surface-2" in active
+        assert "inset 3px 0 0" not in active
+        assert 'data-icon=\\\\\\"records\\\\\\"' in active
 
     def test_side_rail_binds_train_state_telemetry(self):
         from backpropagate.ui_app.chrome import BpSideRail
@@ -521,16 +532,21 @@ class TestChrome:
         rendered = _render(comp)
         for var in ("train_state.run_state", "train_state.loss_history",
                     "train_state.loss_chart_data", "train_state.current_step",
-                    "train_state.current_loss", "train_state.events"):
+                    "train_state.loss_label", "train_state.events"):
             assert var in rendered
         assert {"Events", "View full log"} <= _texts(comp)
         assert "LineChart" in _node_types(comp)
 
-    def test_rail_section_first_has_no_top_border(self):
+    def test_rail_sections_are_rounded_cards(self):
+        """ui-v2 P1 redesign: rail sections are shadowed 14px cards — NO hard
+        1px divider lines between them (the old borderTop rule)."""
         from backpropagate.ui_app.chrome import _rail_section
 
-        assert "borderTop" not in _render(_rail_section(rx.text("a"), first=True))
-        assert "borderTop" in _render(_rail_section(rx.text("a")))
+        for comp in (_rail_section(rx.text("a"), first=True), _rail_section(rx.text("a"))):
+            rendered = _render(comp)
+            assert "borderTop" not in rendered
+            assert "--bp-r-lg" in rendered
+            assert "--bp-shadow-card" in rendered
 
     def test_footer_mounts_auth_badge_refresh(self):
         from backpropagate.ui_app.chrome import BpFooter

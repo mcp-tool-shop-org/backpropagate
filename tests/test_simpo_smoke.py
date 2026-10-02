@@ -162,7 +162,7 @@ def test_simpo_end_to_end_trains_and_saves_adapter(tmp_path: Path) -> None:
     3. ``run_history.json`` records the run with ``method == "simpo"``.
     """
     from backpropagate.checkpoints import RunHistoryManager
-    from backpropagate.trainer import Trainer, TrainingRun, _SIMPO_DEFAULT_LR
+    from backpropagate.trainer import _SIMPO_DEFAULT_LR, Trainer, TrainingRun
 
     data_path = tmp_path / "preferences.jsonl"
     with open(data_path, "w", encoding="utf-8") as fh:

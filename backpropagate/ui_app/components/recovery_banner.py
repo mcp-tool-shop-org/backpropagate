@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import reflex as rx
 
-# Variant → (accent CSS var, icon URL). Info + warn use the info circle;
+from .icon import bp_icon
+
+# Variant → (accent CSS var, icon name). Info + warn use the info circle;
 # the ok variant uses the checkmark.
 _VARIANTS: dict[str, tuple[str, str]] = {
-    "info": ("var(--bp-blue)",    "/icons/info.svg"),
-    "warn": ("var(--bp-amber)",   "/icons/info.svg"),
-    "ok":   ("var(--bp-seafoam)", "/icons/check.svg"),
+    "info": ("var(--bp-blue)",    "info"),
+    "warn": ("var(--bp-amber)",   "info"),
+    "ok":   ("var(--bp-seafoam)", "check"),
 }
 
 
@@ -44,29 +46,14 @@ def BpRecoveryBanner(
         ``Var[str]`` bound to component state (e.g.
         ``TrainState.latest_recovery_ok_msg``).
     """
-    color, icon_url = _VARIANTS.get(variant, _VARIANTS["info"])
+    color, icon_name = _VARIANTS.get(variant, _VARIANTS["info"])
 
-    # FRONTEND-B-005 (Stage C polish): SVG icons served as ``<img src=...>``
-    # cannot be re-tinted via CSS ``color`` - the SVG fill is baked into the
-    # file. The previous ``style={"color": color}`` was dead code (browsers
-    # silently ignore it on ``<img>``). The variant accent is now carried
-    # ONLY by the box border + background tint below, which IS the only
-    # place the variant color visibly applies. The icon itself is whatever
-    # color it ships with on disk - if a future polish pass wants accent-
-    # tinted icons, swap to inline-SVG (rx.html with the SVG source) so the
-    # ``currentColor`` fill picks up the parent's ``color``.
+    # ui-v2 P1 redesign: the icon is now inlined (bp_icon) so its
+    # currentColor stroke picks up the variant accent — the FRONTEND-B-005
+    # comment that used to live here predicted exactly this swap.
     return rx.box(
         rx.flex(
-            rx.image(
-                src=icon_url,
-                width="16px",
-                height="16px",
-                style={
-                    "flex_shrink": "0",
-                    "margin_top": "2px",
-                },
-                alt="",
-            ),
+            bp_icon(icon_name, 16, color=color),
             rx.flex(
                 rx.text(
                     lead,
@@ -100,7 +87,7 @@ def BpRecoveryBanner(
         style={
             "background": f"color-mix(in srgb, {color} 8%, var(--bp-surface))",
             "border": f"1px solid color-mix(in srgb, {color} 35%, transparent)",
-            "border_radius": "var(--bp-r-2)",
+            "border_radius": "var(--bp-r-md)",
         },
         role="status",
         aria_live="polite",

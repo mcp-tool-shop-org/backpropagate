@@ -350,7 +350,7 @@ class TestSimpoKtoLearningRate:
     """v1.6 C2: SimPO/KTO LR auto-lower + high-LR clamp."""
 
     def test_simpo_default_lr(self):
-        from backpropagate.trainer import Trainer, _SIMPO_DEFAULT_LR
+        from backpropagate.trainer import _SIMPO_DEFAULT_LR, Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer(method="simpo", mode="lora")
@@ -366,14 +366,14 @@ class TestSimpoKtoLearningRate:
     @pytest.mark.parametrize("high_lr", [1e-5, 2e-4])
     def test_simpo_high_lr_clamped(self, high_lr):
         """SimPO LR >= 1e-5 clamps down to the stable anchor."""
-        from backpropagate.trainer import Trainer, _SIMPO_DEFAULT_LR
+        from backpropagate.trainer import _SIMPO_DEFAULT_LR, Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer(method="simpo", mode="lora", learning_rate=high_lr)
         assert trainer.learning_rate == pytest.approx(_SIMPO_DEFAULT_LR)
 
     def test_kto_default_lr(self):
-        from backpropagate.trainer import Trainer, _KTO_DEFAULT_LR
+        from backpropagate.trainer import _KTO_DEFAULT_LR, Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer(method="kto", mode="lora")
@@ -389,7 +389,7 @@ class TestSimpoKtoLearningRate:
     @pytest.mark.parametrize("high_lr", [6e-6, 1e-5, 2e-4])
     def test_kto_high_lr_clamped(self, high_lr):
         """KTO LR > 5e-6 clamps down to the published anchor."""
-        from backpropagate.trainer import Trainer, _KTO_DEFAULT_LR
+        from backpropagate.trainer import _KTO_DEFAULT_LR, Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer(method="kto", mode="lora", learning_rate=high_lr)

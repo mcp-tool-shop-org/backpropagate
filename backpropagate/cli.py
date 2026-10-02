@@ -684,6 +684,55 @@ class ProgressBar:
 # COMMAND: train
 # =============================================================================
 
+def _ui_job_update(run_dir: str | None, **fields: object) -> None:
+    """Merge ``fields`` into ``<run_dir>/job.json`` (ui-v2 P1 job record).
+
+    Best-effort: writes are atomic (tmp + replace) and never raise — a UI
+    bookkeeping failure must not change the CLI's exit code. The parent
+    (``ui_jobs.JobManager``) writes the spawn half; this writes the
+    completion half (run_id / output_path / status / exit_code).
+    """
+    if not run_dir:
+        return
+    import json as _json
+    import os as _os
+    import time as _time
+    from pathlib import Path as _Path
+
+    job_path = _Path(run_dir) / "job.json"
+    try:
+        existing: dict = {}
+        if job_path.exists():
+            loaded = _json.loads(job_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing = loaded
+        existing.update(fields)
+        existing["updated_at"] = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+        tmp = job_path.with_suffix(".tmp")
+        tmp.write_text(_json.dumps(existing, indent=2), encoding="utf-8")
+        _os.replace(tmp, job_path)
+    except Exception as exc:  # noqa: BLE001 — UI bookkeeping must never fail the CLI
+        logger.debug("_ui_job_update failed: %r", exc)
+
+
+def _ui_error_note(writer: object, exc: BaseException, run_dir: str | None = None) -> None:
+    """Write the ui-v2 error event + job.json failure record (no-op unused).
+
+    Pulls the stable ``code``/``suggestion`` off BackpropagateError when the
+    exception is structured; plain exceptions fall back to RUNTIME_ERROR.
+    """
+    if writer is None:
+        return
+    code = getattr(exc, "code", None) or "RUNTIME_ERROR"
+    hint = getattr(exc, "suggestion", None)
+    try:
+        writer.error(code=str(code), message=str(exc)[:500], hint=hint)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001  # nosec B110 — writer already logs internally
+        pass
+    if run_dir:
+        _ui_job_update(run_dir, status="failed", error_code=str(code))
+
+
 def cmd_train(args: argparse.Namespace) -> int:
     """
     Execute the train command.
@@ -748,6 +797,20 @@ def cmd_train(args: argparse.Namespace) -> int:
         _print_info(f"Samples: {args.samples}")
 
     try:
+        # ui-v2 P1: when spawned by the web UI (hidden ``--ui-run-dir``),
+        # mirror progress into <run_dir>/events.jsonl and watch control.json
+        # for cooperative stop requests. The file contract lives in
+        # backpropagate/job_events.py; the parent side is ui_jobs.py.
+        ui_run_dir = getattr(args, "ui_run_dir", None)
+        ui_writer = None
+        ui_callback = None
+        if ui_run_dir:
+            from .job_events import JobEventWriter, UiFileEventCallback
+
+            ui_writer = JobEventWriter(ui_run_dir)
+            ui_writer.phase("loading")
+            ui_callback = UiFileEventCallback(ui_run_dir, writer=ui_writer)
+
         # C-CLI-002 progress feedback: phase banner before the model load so a
         # 30-300s silence doesn't read like the tool is wedged. transformers /
         # datasets already emit tqdm progress to stderr during from_pretrained,
@@ -931,18 +994,57 @@ def cmd_train(args: argparse.Namespace) -> int:
         print()  # Blank line before progress
 
         # Train
-        result = trainer.train(
-            dataset=args.data,
-            steps=args.steps,
-            samples=args.samples,
-            callback=callback,
-            resume_from=resume_hint,
-        )
+        train_kwargs: dict[str, Any] = {
+            "dataset": args.data,
+            "steps": args.steps,
+            "samples": args.samples,
+            "callback": callback,
+            "resume_from": resume_hint,
+        }
+        # ui-v2 P1: only pass the kwarg when the UI spawned us — keeps mocked
+        # Trainer doubles (which predate the extra_callbacks param) green.
+        if ui_callback is not None:
+            train_kwargs["extra_callbacks"] = [ui_callback]
+        result = trainer.train(**train_kwargs)
 
         progress.finish()
 
         # Save
+        if ui_writer is not None:
+            ui_writer.phase("saving")
         save_path = trainer.save(args.output)
+
+        if ui_writer is not None:
+            saved_dir = save_path[0] if isinstance(save_path, (list, tuple)) else save_path
+            # A run that ended because the operator asked for a cooperative
+            # stop reports "stopped", not "done" — the status is the
+            # difference between "finished early on request" and "completed".
+            from .job_events import read_stop_request
+
+            final_status = (
+                "stopped"
+                if ui_run_dir and read_stop_request(str(ui_run_dir))
+                else "done"
+            )
+            ui_writer.done(
+                status=final_status,
+                # The step actually reached — NOT the requested total. The
+                # callback observes every step boundary (on_step_end), so a
+                # cooperative stop at 26/400 reports 26.
+                steps_done=(
+                    int(ui_callback.last_step)
+                    if ui_callback is not None and ui_callback.last_step
+                    else int(getattr(result, "steps", 0) or 0)
+                ),
+                output_path=str(saved_dir),
+            )
+            _ui_job_update(
+                ui_run_dir,
+                run_id=str(getattr(result, "run_id", None) or cli_run_id_full),
+                output_path=str(saved_dir),
+                status=final_status,
+                exit_code=EXIT_OK,
+            )
 
         print()
         _print_success("Training complete!")
@@ -960,8 +1062,20 @@ def cmd_train(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         print()
         _print_warning("Training interrupted by user")
+        if ui_writer is not None:
+            # The cooperative stop path ends here: the callback flipped
+            # should_training_stop, HF unwound the loop, and cmd_train's
+            # generic Ctrl+C handling does the rest.
+            ui_writer.done(
+                status="stopped",
+                steps_done=(
+                    int(ui_callback.last_step) if ui_callback is not None else 0
+                ),
+            )
+            _ui_job_update(ui_run_dir, status="stopped", exit_code=EXIT_INTERRUPTED)
         return EXIT_INTERRUPTED
     except UserInputError as e:
+        _ui_error_note(ui_writer, e, ui_run_dir)
         _print_structured_error(e)
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
@@ -971,6 +1085,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     except DatasetError as e:
         # DatasetError covers user-supplied dataset issues (missing file,
         # parse failure, validation) — user-actionable.
+        _ui_error_note(ui_writer, e, ui_run_dir)
         _print_structured_error(e, prefix="Dataset error: ")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
@@ -980,6 +1095,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     except TrainingError as e:
         # TrainingError covers model load failures, training aborts, checkpoint
         # IO — runtime-level problems the user generally cannot pre-validate.
+        _ui_error_note(ui_writer, e, ui_run_dir)
         _print_structured_error(e, prefix="Training error: ")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
@@ -994,6 +1110,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     except BackpropagateError as e:
         # Default for any other structured BackpropagateError subclass —
         # treat as runtime error unless it is explicitly user-actionable.
+        _ui_error_note(ui_writer, e, ui_run_dir)
         _print_structured_error(e)
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
@@ -1001,6 +1118,7 @@ def cmd_train(args: argparse.Namespace) -> int:
             logger.exception("Error details")
         return EXIT_RUNTIME_ERROR
     except Exception as e:
+        _ui_error_note(ui_writer, e, ui_run_dir)
         # Unexpected — re-raise under --verbose so users can see the full
         # traceback; otherwise emit a redacted single-line message and exit
         # with the runtime-error code.
@@ -7855,6 +7973,18 @@ Tips:
             "downstream queries (`backprop show-run`) see one continuous "
             "session instead of two."
         ),
+    )
+    # ui-v2 P1 (internal contract): when the web UI spawns training, it passes
+    # its job directory here; the child then mirrors progress/stop/checkpoint
+    # state into events.jsonl + control.json + job.json (backpropagate/
+    # job_events.py + ui_jobs.py). Hidden: not a supported operator surface,
+    # no handbook row — the flag only composes with `backprop ui`. Bridged in
+    # scripts/doc-drift-allow.toml.
+    train_parser.add_argument(
+        "--ui-run-dir",
+        default=None,
+        metavar="DIR",
+        help=argparse.SUPPRESS,
     )
     train_parser.set_defaults(func=cmd_train)
 

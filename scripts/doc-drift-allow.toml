@@ -87,6 +87,10 @@ cli_flags_grandfathered = [
     "--push-to-hub",    # backprop push --push-to-hub
     "--repo",           # backprop push --repo
     "--resume",         # backprop train --resume (documented in prose, not the table)
+    # ui-v2 P1: hidden (argparse.SUPPRESS) internal contract between
+    # `backprop ui` and the training subprocess — never an operator surface,
+    # so it gets no handbook row. See backpropagate/job_events.py docstring.
+    "--ui-run-dir",     # backprop train --ui-run-dir (internal, hidden)
     "--set",            # backprop config --set (already in cli-reference.md table for config)
     "--status",         # backprop runs --status
     "--token",          # backprop push --token
@@ -121,9 +125,18 @@ AppState = [
 
 # TrainState — gpu_safety telemetry fields populated by the trainer event
 # stream but rendered through templated text the heuristic doesn't catch.
+# ui-v2 P1 fix round adds the series fields: they feed the ``loss_label`` /
+# ``loss_chart_data`` COMPUTED vars (server-side; the rendered JS references
+# the computed var name), so the substring scan can't trace them.
 TrainState = [
     "vram_used_gb",
     "vram_total_gb",
+    # consumed by the loss_label computed var (4-decimal display; pages bind
+    # train_state.loss_label, never the raw float)
+    "current_loss",
+    # consumed by the loss_chart_data computed var (recharts step/loss/ema rows)
+    "ema_history",
+    "step_history",
 ]
 
 # MultiRunState — every config field is mirrored from TrainState by

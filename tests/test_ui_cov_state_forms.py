@@ -384,7 +384,7 @@ class TestTrainStateComputedVars:
     @pytest.mark.parametrize(
         ("run_state", "complete"),
         [("idle", False), ("loading", False), ("active", False), ("paused", False),
-         ("done", True), ("error", True)],
+         ("done", True), ("stopped", True), ("error", True)],
     )
     def test_run_complete(self, run_state, complete):
         s = us.TrainState()
@@ -496,22 +496,50 @@ class TestTrainStateSettersExhaustive:
 
 
 class TestTrainStateHandlers:
-    def test_start_training_points_at_the_cli_and_never_fakes_a_run(self):
+    def test_start_training_never_fakes_a_run(self):
+        """ui-v2 P1: invalid input -> refusal on screen, never a fake spinner."""
         s = us.TrainState()
         s.start_training()
         s.start_training()
         assert s.run_state == "idle"
-        assert "backprop train" in s.cli_notice and s.cli_notice == us._CLI_NOTICE_TRAIN
-        assert len(s.events) == 2  # appended, not overwritten
-        assert all(e["level"] == "info" and "backprop train" in e["msg"] for e in s.events)
+        assert s.job_refusal != ""  # dataset missing / outside sandbox
+        assert s.job_id == ""
 
     @pytest.mark.parametrize("state", ["active", "loading", "paused"])
     def test_stop_training_resets_a_live_run(self, state):
+        """No live child -> Stop quietly returns to idle (nothing to save)."""
         s = us.TrainState()
         s.run_state = state
         s.stop_training()
         assert s.run_state == "idle"
-        assert s.events[-1]["msg"] == "[stub] training stopped"
+
+    def test_stop_training_requests_cooperative_stop(self, tmp_path, monkeypatch):
+        """A live child gets control.json via the manager + an armed deadline."""
+        import backpropagate.ui_jobs as ui_jobs
+
+        calls: list[str] = []
+
+        class _LiveManager:
+            def is_alive(self, job_id):
+                return True
+
+            def grace_window(self, job_id):
+                return 60.0
+
+            def request_stop(self, job_id):
+                calls.append(job_id)
+                return True
+
+        monkeypatch.setattr(ui_jobs, "get_job_manager", lambda: _LiveManager())
+        s = us.TrainState()
+        s.job_id = "run_live"
+        s.run_state = "active"
+        s.stop_training()
+        assert calls == ["run_live"]
+        assert s._stop_pending is True
+        assert s._stop_deadline > 0
+        assert s.run_state == "active"  # still running until the child exits
+        assert any("Stop requested" in e["msg"] for e in s.events)
 
     @pytest.mark.parametrize("state", ["idle", "done", "error"])
     def test_stop_training_is_a_noop_when_nothing_is_running(self, state):

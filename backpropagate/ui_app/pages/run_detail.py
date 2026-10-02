@@ -73,8 +73,12 @@ def _metadata_header() -> rx.Component:
         rx.flex(
             rx.heading(
                 "Run " + RunDetailState.current_run_id,
-                size="5",
-                style={"color": "var(--bp-text)", "font_weight": "500"},
+                size="7",
+                style={
+                    "color": "var(--bp-text)",
+                    "font_weight": "600",
+                    "letter_spacing": "-0.02em",
+                },
             ),
             rx.cond(
                 RunDetailState.status == "completed",
@@ -718,8 +722,8 @@ def run_detail_page() -> rx.Component:
                         ),
                     ),
                     direction="column",
-                    gap="4",
-                    padding="6",
+                    gap="6",
+                    padding="7",
                     max_width="980px",
                     width="100%",
                     on_mount=RunDetailState.load_run,

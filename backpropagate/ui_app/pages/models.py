@@ -264,8 +264,12 @@ def models_page() -> rx.Component:
                 rx.flex(
                     rx.heading(
                         "Local models",
-                        size="6",
-                        style={"color": "var(--bp-text)", "font_weight": "500"},
+                        size="7",
+                        style={
+                            "color": "var(--bp-text)",
+                            "font_weight": "600",
+                            "letter_spacing": "-0.02em",
+                        },
                     ),
                     rx.text(
                         "Hugging Face cache inventory. Each entry is a "
@@ -341,8 +345,8 @@ def models_page() -> rx.Component:
                         rx.fragment(),
                     ),
                     direction="column",
-                    gap="4",
-                    padding="6",
+                    gap="6",
+                    padding="7",
                     max_width="980px",
                     width="100%",
                     on_mount=ModelsState.load_models,

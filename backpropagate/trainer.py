@@ -5472,6 +5472,7 @@ class Trainer:
         steps: int | None = None,
         samples: int | None = None,
         callback: TrainingCallback | None = None,
+        extra_callbacks: list[Any] | None = None,
         resume_from: str | None = None,
     ) -> TrainingRun:
         """
@@ -5482,6 +5483,10 @@ class Trainer:
             steps: Number of training steps (overrides config)
             samples: Number of samples to use (overrides config)
             callback: Optional callback for training events
+            extra_callbacks: Optional raw HF ``TrainerCallback`` list appended
+                after the ``TrainingCallback`` bridge (ui-v2 P1: the UI's
+                file-event + stop-file watchers ride through here). Not
+                exception-isolated — UI callbacks must be self-guarding.
             resume_from: F-002 — when set, look up the run_id in the on-disk
                 run history (scoped to ``self.output_dir``) and reuse its
                 run_id + last checkpoint path. When ``None`` (default),
@@ -5764,7 +5769,9 @@ class Trainer:
         _bridge_cb = (
             _build_trl_bridge_callback(callback) if callback is not None else None
         )
-        sft_callbacks = [_bridge_cb] if _bridge_cb is not None else None
+        _extra_cbs = list(extra_callbacks or [])
+        _cbs = ([_bridge_cb] if _bridge_cb is not None else []) + _extra_cbs
+        sft_callbacks: list[Any] | None = _cbs or None
 
         # v1.5 T1.2 (ORPO Wave 2): construct via the shared _build_trainer
         # helper (SFTTrainer or ORPOTrainer per self.method). This is the
@@ -5964,9 +5971,10 @@ class Trainer:
                         _bridge_cb_retry = (
                             _build_trl_bridge_callback(callback) if callback is not None else None
                         )
-                        sft_callbacks_retry = (
-                            [_bridge_cb_retry] if _bridge_cb_retry is not None else None
-                        )
+                        _cbs_retry = (
+                            [_bridge_cb_retry] if _bridge_cb_retry is not None else []
+                        ) + list(extra_callbacks or [])
+                        sft_callbacks_retry: list[Any] | None = _cbs_retry or None
                         self._trainer = self._build_trainer(
                             training_args, train_dataset, sft_callbacks_retry
                         )

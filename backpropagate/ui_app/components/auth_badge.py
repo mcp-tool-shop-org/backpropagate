@@ -79,12 +79,12 @@ def _emoji_for_mode() -> rx.Var[str]:
     """
     return rx.match(
         AuthBadgeState.mode_key,
-        ("no_auth_local", "[OPEN]"),
-        ("token_local", "[KEY]"),
-        ("basic_local", "[LOCK]"),
-        ("basic_shared", "[SHARED]"),
-        ("basic_network", "[NETWORK]"),
-        ("insecure", "[ALERT]"),
+        ("no_auth_local", "○"),
+        ("token_local", "●"),
+        ("basic_local", "●"),
+        ("basic_shared", "◐"),
+        ("basic_network", "◐"),
+        ("insecure", "▲"),
         "",
     )
 

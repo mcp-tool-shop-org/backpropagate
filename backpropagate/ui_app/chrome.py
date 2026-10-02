@@ -1,14 +1,11 @@
 """Shared shell pieces — header, left nav, side rail, footer.
 
-Per design digest §3 (Train surface component tree), §8 (Reflex implementation
-map), and §4 (interaction patterns).
+ui-v2 P1 redesign (Director's bar): curves + breathing room.
 
-Width budget:
-
-- ``BpHeader``  — 56px tall
-- ``BpLeftNav`` — 188px wide
-- main scroll area — flex-grow
-- ``BpSideRail`` — 296px wide
+- ``BpHeader``  — 60px tall, 20px control icons with 36px hit areas
+- ``BpLeftNav`` — 208px wide, active page is a rounded PILL highlight
+- main scroll area — flex-grow on the page background
+- ``BpSideRail`` — 300px wide, sections are rounded cards (no grid lines)
 - ``BpFooter``  — 32px tall
 """
 
@@ -21,17 +18,16 @@ from backpropagate.ui_state import AppState, AuthBadgeState, TrainState
 
 from .components.auth_badge import BpAuthBadge
 from .components.event_log import BpEventLog
-from .components.gpu_ring import BpGpuRing
+from .components.icon import bp_icon
 from .components.loss_chart import BpLossChart
-from .components.sparkline import BpSparkline
 from .components.status_pill import BpStatusPill
-from .components.vram_bar import BpVramBar
 
 # FRONTEND-A-015: shared dynamic version label so header + footer cannot drift.
 _BRAND_VERSION = f"v{__version__}"
 
-# Surface key -> (label, href, icon URL). The icons live under
-# ``backpropagate/assets/icons/`` so Reflex serves them at ``/icons/<name>.svg``.
+# Surface key -> (label, href, icon name). Icons are inlined by
+# ``components/icon.py`` so their ``currentColor`` strokes follow the row's
+# text color (as ``<img>`` they always rendered black — FRONTEND-B-005).
 #
 # Wave 6 added the ``runs`` entry (FRONTEND-F-RUN-HISTORY-PAGE) - closes the
 # CLI/UI parity gap created when F-003 shipped ``backprop list-runs`` /
@@ -39,15 +35,15 @@ _BRAND_VERSION = f"v{__version__}"
 # the dedicated ``records.svg`` glyph instead of reusing ``train.svg`` -
 # distinct visual identity matters in a 5-item nav.
 _NAV_ITEMS = (
-    ("train",     "Single run", "/",          "/icons/train.svg"),
-    ("multi-run", "Multi-run",  "/multi-run", "/icons/multi-run.svg"),
-    ("export",    "Export",     "/export",    "/icons/export.svg"),
-    ("dataset",   "Dataset",    "/dataset",   "/icons/dataset.svg"),
-    ("runs",      "Runs",       "/runs",      "/icons/records.svg"),
+    ("train",     "Single run", "/",          "train"),
+    ("multi-run", "Multi-run",  "/multi-run", "multi-run"),
+    ("export",    "Export",     "/export",    "export"),
+    ("dataset",   "Dataset",    "/dataset",   "dataset"),
+    ("runs",      "Runs",       "/runs",      "records"),
     # Wave 6b (FRONTEND-7): /models — local HF cache inventory + cleanup.
-    # ``chip.svg`` reads as "compute hardware / model artifact"; matches the
+    # ``chip`` reads as "compute hardware / model artifact"; matches the
     # mental model that lives alongside Runs in the operator's workflow.
-    ("models",    "Models",     "/models",    "/icons/chip.svg"),
+    ("models",    "Models",     "/models",    "chip"),
 )
 
 
@@ -130,43 +126,50 @@ def BpHeader() -> rx.Component:
             # it once; we show the sun icon (= will switch to light) when
             # NOT currently light, regardless of whether dark is the
             # resolved system pref or an explicit choice.
+            #
+            # ui-v2 P1 redesign: 20px icon inside a 36x36 pill hit area.
             rx.button(
                 rx.cond(
                     rx.color_mode == "light",
-                    rx.image(
-                        src="/icons/moon.svg",
-                        width="16px",
-                        height="16px",
-                        alt="switch to dark theme",
-                    ),
-                    rx.image(
-                        src="/icons/sun.svg",
-                        width="16px",
-                        height="16px",
-                        alt="switch to light theme",
-                    ),
+                    bp_icon("moon", 20),
+                    bp_icon("sun", 20),
                 ),
-                size="1",
+                size="2",
                 variant="ghost",
                 on_click=rx.toggle_color_mode,
                 aria_label="Toggle theme",
+                style={
+                    "width": "36px",
+                    "height": "36px",
+                    "border_radius": "var(--bp-r-pill)",
+                    "padding": "0",
+                    "align_items": "center",
+                    "justify_content": "center",
+                    "display": "flex",
+                    "color": "var(--bp-text-2)",
+                },
             ),
             rx.link(
-                rx.image(
-                    src="/icons/github.svg",
-                    width="16px",
-                    height="16px",
-                    alt="GitHub repository",
+                rx.box(
+                    bp_icon("github", 20),
+                    width="36px",
+                    height="36px",
+                    border_radius="var(--bp-r-pill)",
+                    display="flex",
+                    align_items="center",
+                    justify_content="center",
+                    class_name="bp-nav-row",
                 ),
                 href="https://github.com/mcp-tool-shop-org/backpropagate",
                 is_external=True,
+                aria_label="GitHub repository",
                 style={"color": "var(--bp-muted)"},
             ),
-            gap="3",
+            gap="2",
             align="center",
         ),
-        padding_x="20px",
-        height="56px",
+        padding_x="24px",
+        height="60px",
         align="center",
         width="100%",
         style={
@@ -188,24 +191,14 @@ def BpHeader() -> rx.Component:
 # ---------------------------------------------------------------------------
 
 
-def _nav_link(key: str, label: str, href: str, icon_url: str, active_key: str) -> rx.Component:
-    """One nav row. Active gets a teal inset bar + brighter text."""
+def _nav_link(key: str, label: str, href: str, icon_name: str, active_key: str) -> rx.Component:
+    """One nav row. Active page = rounded pill highlight (ui-v2 P1 redesign)."""
     is_active = active_key == key
     return rx.link(
         rx.flex(
-            rx.image(
-                src=icon_url,
-                width="18px",
-                height="18px",
-                # FRONTEND-B-005: CSS ``color`` is inert on an ``<img>`` SVG
-                # (fill is baked into the file), so no active-state tint is
-                # applied here. The active row is conveyed by the text
-                # weight/color + the teal inset bar below.
-                style={
-                    "flex_shrink": "0",
-                },
-                alt="",
-            ),
+            # Inlined SVG: currentColor inherits the row color below
+            # (muted when inactive, full text color when active).
+            bp_icon(icon_name, 20),
             rx.text(
                 label,
                 size="2",
@@ -216,18 +209,16 @@ def _nav_link(key: str, label: str, href: str, icon_url: str, active_key: str) -
             ),
             gap="3",
             align="center",
-            padding_x="3",
-            padding_y="2",
             width="100%",
             style={
-                "border_radius": "var(--bp-r-2)",
-                "box_shadow": (
-                    "inset 3px 0 0 var(--bp-teal)" if is_active else "none"
-                ),
+                "padding": "9px 14px",
+                "border_radius": "var(--bp-r-pill)",
+                "color": "var(--bp-text)" if is_active else "var(--bp-muted)",
+                # The pill: filled surface for the active page, transparent
+                # otherwise. ``.bp-nav-row:hover`` (TOKENS_CSS) covers hover.
                 "background": (
                     "var(--bp-surface-2)" if is_active else "transparent"
                 ),
-                "transition": "background 0.15s ease, color 0.15s ease",
             },
             class_name="bp-nav-row",
         ),
@@ -261,8 +252,8 @@ def BpLeftNav(active: str = "train") -> rx.Component:
         ),
         rx.spacer(),
         direction="column",
-        width="188px",
-        padding="3",
+        width="208px",
+        padding="4",
         height="100%",
         style={
             "background": "var(--bp-surface)",
@@ -285,15 +276,22 @@ def BpLeftNav(active: str = "train") -> rx.Component:
 # ---------------------------------------------------------------------------
 
 
-def _rail_section(*children: rx.Component, first: bool = False) -> rx.Component:
-    """One bordered section in the side rail."""
-    style: dict[str, str] = {
-        "padding": "16px 0",
-        "width": "100%",
-    }
-    if not first:
-        style["border_top"] = "1px solid var(--bp-border)"
-    return rx.flex(*children, direction="column", gap="2", style=style)
+def _rail_section(*children: rx.Component, first: bool = False) -> rx.Component:  # noqa: ARG001 — kept for call-site stability
+    """One card in the side rail (ui-v2 P1 redesign: rounded cards, generous
+    gaps — no hard 1px divider lines between sections)."""
+    return rx.flex(
+        *children,
+        direction="column",
+        gap="3",
+        padding="4",
+        width="100%",
+        style={
+            "background": "var(--bp-surface)",
+            "border": "1px solid var(--bp-border)",
+            "border_radius": "var(--bp-r-lg)",
+            "box_shadow": "var(--bp-shadow-card)",
+        },
+    )
 
 
 def BpSideRail() -> rx.Component:
@@ -311,10 +309,10 @@ def BpSideRail() -> rx.Component:
         # Loss chart section — FRONTEND-6 (Wave 6b): wire to TrainState.
         # loss_history (via loss_chart_data computed Var) so the side-rail
         # actually shows live training loss instead of the v1.2 literal
-        # placeholder. When the list is empty (idle / first frame) fall back
-        # to the SVG placeholder so the rail doesn't look broken before the
-        # first metric arrives. Recharts re-renders only the chart, not the
-        # full page tree, so per-step updates are cheap.
+        # placeholder. When the list is empty (idle / first frame) show a
+        # one-line hint — not an empty chart frame, which reads as broken.
+        # Recharts re-renders only the chart, not the full page tree, so
+        # per-step updates are cheap.
         _rail_section(
             rx.cond(
                 TrainState.loss_history.length() == 0,
@@ -329,12 +327,10 @@ def BpSideRail() -> rx.Component:
                             "font_size": "10px",
                         },
                     ),
-                    BpSparkline(
-                        data=[],
-                        w=264,
-                        h=48,
-                        caption="",
-                        meta="",
+                    rx.text(
+                        "Start a run to see the curve.",
+                        size="1",
+                        style={"color": "var(--bp-muted-2)"},
                     ),
                     direction="column",
                     gap="1",
@@ -354,6 +350,7 @@ def BpSideRail() -> rx.Component:
                         TrainState.loss_chart_data,
                         height=80,
                         label="loss",
+                        ema_label="ema",
                     ),
                     direction="column",
                     gap="1",
@@ -361,15 +358,16 @@ def BpSideRail() -> rx.Component:
             ),
             rx.flex(
                 rx.text(
-                    TrainState.current_step,
-                    size="4",
+                    "step " + TrainState.current_step.to_string(),
+                    size="2",
                     weight="medium",
                     class_name="bp-num bp-tick",
                     style={"color": "var(--bp-text)", "letter_spacing": "-0.02em"},
                 ),
                 rx.spacer(),
                 rx.text(
-                    TrainState.current_loss,
+                    # ui-v2 P1 fix: formatted (4 decimals), not the raw repr.
+                    TrainState.loss_label,
                     size="2",
                     class_name="bp-num",
                     style={"color": "var(--bp-teal)"},
@@ -379,12 +377,74 @@ def BpSideRail() -> rx.Component:
                 width="100%",
             ),
         ),
-        # GPU ring + VRAM bar
+        # GPU ring + VRAM bar — ui-v2 P1: LIVE-bound to TrainState's live
+        # readings (the v1.4 build passed literal zeros, which the draft2
+        # screenshots showed as the fake "VRAM 0.0 / 16.0 GB" placeholder:
+        # BpGpuRing/BpVramBar compute their geometry at build time so they can
+        # never bind live — the rail uses computed-var-driven boxes instead).
         _rail_section(
             rx.flex(
-                BpGpuRing(temp_c=0, size=60),
+                # Temp ring as a conic-gradient disc (live via gpu_fill_pct)
+                rx.box(
+                    rx.box(
+                        rx.text(
+                            TrainState.gpu_temp_label,
+                            size="1",
+                            weight="medium",
+                            class_name="bp-num",
+                            style={"color": "var(--bp-text)"},
+                        ),
+                        width="44px",
+                        height="44px",
+                        border_radius="50%",
+                        background="var(--bp-surface)",
+                        display="flex",
+                        align_items="center",
+                        justify_content="center",
+                    ),
+                    width="60px",
+                    height="60px",
+                    border_radius="50%",
+                    display="flex",
+                    align_items="center",
+                    justify_content="center",
+                    background=(
+                        "conic-gradient(var(--bp-teal) 0%, var(--bp-teal) "
+                        + TrainState.gpu_fill_pct
+                        + ", var(--bp-surface-3) "
+                        + TrainState.gpu_fill_pct
+                        + ", var(--bp-surface-3) 100%)"
+                    ),
+                    flex_shrink="0",
+                ),
                 rx.flex(
-                    BpVramBar(used_gb=0.0, total_gb=16.0),
+                    rx.text(
+                        TrainState.gpu_name,
+                        size="1",
+                        style={"color": "var(--bp-text-2)", "flex_grow": "1"},
+                    ),
+                    rx.box(
+                        rx.box(
+                            width=TrainState.vram_fill_pct,
+                            height="100%",
+                            background="var(--bp-teal)",
+                            border_radius="var(--bp-r-pill)",
+                            style={"transition": "width 0.4s ease-out"},
+                        ),
+                        width="100%",
+                        height="8px",
+                        background="var(--bp-surface-3)",
+                        border_radius="var(--bp-r-pill)",
+                        overflow="hidden",
+                        role="progressbar",
+                        aria_label="VRAM used",
+                    ),
+                    rx.text(
+                        TrainState.vram_label,
+                        size="1",
+                        class_name="bp-num",
+                        style={"color": "var(--bp-text-2)"},
+                    ),
                     direction="column",
                     flex_grow="1",
                     gap="2",
@@ -410,12 +470,11 @@ def BpSideRail() -> rx.Component:
             BpEventLog(events=TrainState.events, max_n=6, show_view_full=True),
         ),
         direction="column",
-        gap="0",
-        width="296px",
-        padding_x="16px",
+        gap="3",
+        width="300px",
+        padding="4",
         height="100%",
         style={
-            "background": "var(--bp-surface)",
             "border_left": "1px solid var(--bp-border)",
             "overflow_y": "auto",
             "flex_shrink": "0",

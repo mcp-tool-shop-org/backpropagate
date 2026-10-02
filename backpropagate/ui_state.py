@@ -2965,6 +2965,12 @@ class RunsState(rx.State):
     output_dir_override: str = ""
     last_loaded_at: str = ""
     last_loaded_label: str = ""
+    # Storage line under the table: what the job folders use, and how much a
+    # clean-up would free. Nothing is removed automatically.
+    storage_label: str = ""
+    storage_removable_label: str = ""
+    storage_removable_count: int = 0
+    storage_result: str = ""
 
     # Hard cap on rows rendered at once. The CLI defaults to 50; the table can
     # comfortably render this many without pagination. v1.3 will add a
@@ -3130,8 +3136,55 @@ class RunsState(rx.State):
             self.runs = trimmed
             self.last_loaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
             self.last_loaded_label = _fmt_local_time()
+            self._load_storage()
         finally:
             self.loading = False
+
+    def _load_storage(self) -> None:
+        """Fill the storage line from the job manager (never raises)."""
+        try:
+            from .ui_jobs import get_job_manager
+
+            summary = get_job_manager().storage_summary()
+        except Exception:  # noqa: BLE001 - the storage line is informational
+            self.storage_label = ""
+            self.storage_removable_label = ""
+            self.storage_removable_count = 0
+            return
+        folders = int(summary.get("folders") or 0)
+        removable = int(summary.get("removable_folders") or 0)
+        plural = "" if folders == 1 else "s"
+        self.storage_label = (
+            f"{folders} job folder{plural} · {_fmt_bytes(summary.get('bytes') or 0)}"
+            if folders
+            else ""
+        )
+        self.storage_removable_count = removable
+        self.storage_removable_label = (
+            f"{removable} without a saved model · "
+            f"{_fmt_bytes(summary.get('removable_bytes') or 0)}"
+            if removable
+            else ""
+        )
+
+    @rx.event
+    def clean_up_storage(self):
+        """Remove job folders that hold no saved model (failed, cancelled and
+        measurement jobs). Runs with a model are deleted from their own page."""
+        from .ui_jobs import get_job_manager
+
+        try:
+            result = get_job_manager().clean_up()
+        except Exception as exc:  # noqa: BLE001 - shown, not raised
+            self.storage_result = _redact_action(f"Clean-up failed: {exc}")
+            return None
+        removed = int(result.get("removed") or 0)
+        plural = "" if removed == 1 else "s"
+        text = f"Removed {removed} folder{plural}, freed {_fmt_bytes(result.get('bytes') or 0)}."
+        if result.get("errors"):
+            text += f" {int(result['errors'])} could not be removed (in use?)."
+        self.storage_result = text
+        return RunsState.load_runs
 
     # Canonical status set. Mirrors the values RunHistoryManager.list_runs
     # accepts (``VALID_STATUSES``: running / completed / failed - it raises

@@ -350,6 +350,105 @@ def _error_callout() -> rx.Component:
     )
 
 
+def _storage_row() -> rx.Component:
+    """What the job folders use, and a clean-up that never removes a model."""
+    return rx.cond(
+        RunsState.storage_label != "",
+        rx.box(
+            rx.flex(
+                rx.flex(
+                    rx.text(
+                        "Storage",
+                        style={"color": "var(--bp-text-2)", "font_size": "12px"},
+                    ),
+                    rx.text(
+                        RunsState.storage_label,
+                        class_name="bp-num",
+                        style={"color": "var(--bp-text)", "font_size": "15px", "font_weight": "600"},
+                    ),
+                    direction="column",
+                    gap="2px",
+                ),
+                rx.text(
+                    rx.cond(
+                        RunsState.storage_removable_count > 0,
+                        RunsState.storage_removable_label,
+                        "Every folder holds a saved model. Delete a run from its own page.",
+                    ),
+                    size="1",
+                    style={"color": "var(--bp-muted)", "font_size": "13px", "flex": "1 1 200px"},
+                ),
+                rx.alert_dialog.root(
+                    rx.alert_dialog.trigger(
+                        rx.button(
+                            "Clean up",
+                            variant="outline",
+                            color_scheme="gray",
+                            size="2",
+                            disabled=(RunsState.storage_removable_count == 0)
+                            | TrainState.form_disabled,
+                            style={"border_radius": "var(--bp-r-pill)"},
+                        ),
+                    ),
+                    rx.alert_dialog.content(
+                        rx.alert_dialog.title("Remove job folders without a model?"),
+                        rx.alert_dialog.description(
+                            "This permanently removes the folders of failed, cancelled "
+                            "and measurement jobs: their logs and progress files. A run "
+                            "that saved a model is never removed here.",
+                        ),
+                        rx.text(
+                            RunsState.storage_removable_label,
+                            size="2",
+                            style={"color": "var(--bp-text-2)", "margin_top": "8px"},
+                        ),
+                        rx.flex(
+                            rx.alert_dialog.cancel(
+                                rx.button("Cancel", variant="soft", color_scheme="gray", size="2"),
+                            ),
+                            rx.alert_dialog.action(
+                                rx.button(
+                                    "Remove",
+                                    variant="solid",
+                                    color_scheme="red",
+                                    size="2",
+                                    on_click=RunsState.clean_up_storage,
+                                ),
+                            ),
+                            gap="var(--space-3)",
+                            justify="end",
+                            margin_top="var(--space-3)",
+                        ),
+                    ),
+                ),
+                align="center",
+                gap="var(--space-5)",
+                wrap="wrap",
+                width="100%",
+            ),
+            rx.cond(
+                RunsState.storage_result != "",
+                rx.text(
+                    RunsState.storage_result,
+                    size="1",
+                    role="status",
+                    style={"color": "var(--bp-text-2)", "font_size": "13px", "margin_top": "8px"},
+                ),
+                rx.fragment(),
+            ),
+            padding="14px 20px",
+            width="100%",
+            style={
+                "background": "var(--bp-surface)",
+                "border": "1px solid var(--bp-border)",
+                "border_radius": "var(--bp-r-lg)",
+                "box_shadow": "var(--bp-shadow-card)",
+            },
+        ),
+        rx.fragment(),
+    )
+
+
 def runs_page() -> rx.Component:
     """The ``/runs`` route.
 
@@ -448,6 +547,7 @@ def runs_page() -> rx.Component:
                             ),
                         ),
                     ),
+                    _storage_row(),
                     rx.cond(
                         RunsState.last_loaded_at != "",
                         rx.text(

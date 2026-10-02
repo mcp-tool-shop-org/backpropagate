@@ -57,6 +57,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load size is still measured. Stored in `~/.backpropagate/vram-calibration.json`
   (`BACKPROPAGATE_VRAM_CALIBRATION`); `--no-calibration` ignores it. New
   error code `RUNTIME_VRAM_CALIBRATION_FAILED`.
+- **Storage on the Runs page**: how much disk the UI's job folders use,
+  and a **Clean up** button that removes the folders of failed, cancelled
+  and measurement jobs (logs and progress files) after a confirmation. A
+  folder that holds a saved model, adapter, checkpoint or GGUF is never
+  removed there, nor is a running job. Nothing is deleted automatically.
 - **Estimated VRAM next to Start training**: "Fits", "Tight" or "Won't fit"
   for the chosen model, mode, LoRA rank and batch, against your card. The
   number is exactly `backprop estimate-vram`'s.

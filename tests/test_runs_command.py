@@ -346,7 +346,7 @@ class TestRunsState:
         assert state.output_dir_override == ""
         assert state.last_loaded_at == ""
 
-    def test_load_runs_against_empty_history_sets_error(self, tmp_path):
+    def test_load_runs_against_empty_history_sets_error(self, tmp_path, monkeypatch):
         """When the history directory is missing, ``load_runs`` populates ``error``."""
         pytest.importorskip(
             "reflex",
@@ -354,6 +354,8 @@ class TestRunsState:
         )
         from backpropagate.ui_state import RunsState
 
+        # The override must lie inside the UI output folder (lane B, B-11).
+        monkeypatch.setenv("BACKPROPAGATE_UI__OUTPUT_DIR", str(tmp_path))
         state = RunsState()
         state.output_dir_override = str(tmp_path / "nope")
         state.load_runs()
@@ -361,7 +363,7 @@ class TestRunsState:
         assert "No run history" in state.error
         assert state.loading is False  # Always reset in finally:
 
-    def test_load_runs_populates_from_history(self, tmp_path):
+    def test_load_runs_populates_from_history(self, tmp_path, monkeypatch):
         """A populated history directory loads + projects entries into state."""
         pytest.importorskip(
             "reflex",
@@ -381,6 +383,8 @@ class TestRunsState:
             },
         ])
 
+        # The override must lie inside the UI output folder (lane B, B-11).
+        monkeypatch.setenv("BACKPROPAGATE_UI__OUTPUT_DIR", str(tmp_path))
         state = RunsState()
         state.output_dir_override = str(tmp_path)
         state.load_runs()

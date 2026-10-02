@@ -4183,7 +4183,9 @@ class RunDetailState(rx.State):
     def checkpoint_path_display(self) -> str:
         if not self._checkpoint_path or self._checkpoint_path == "-":
             return "-"
-        return _redact_action(self._checkpoint_path)
+        # Relative to the UI output folder when it lies inside it (the usual
+        # case for a UI job), otherwise the redacted path.
+        return _display_output_path(self._checkpoint_path)
 
     # Action panel — last action result (for the operator-facing toast).
     # Diff shells out to ``backprop diff-runs``; Replay / Delete / Export run
@@ -4333,7 +4335,7 @@ class RunDetailState(rx.State):
             if entry is None:
                 self.not_found = True
                 self.error = _redact_action(
-                    f"Run '{self.current_run_id}' not found in {history_dir}."
+                    f"Run '{self.current_run_id}' not found in the run history."
                 )
                 return
 
@@ -4606,7 +4608,7 @@ class RunDetailState(rx.State):
             entry = manager.get_run(self.current_run_id)
             if entry is None:
                 self.action_error = _redact_action(
-                    f"Run '{self.current_run_id}' not found in {history_dir}."
+                    f"Run '{self.current_run_id}' not found in the run history."
                 )
                 self.action_result = ""
                 return
@@ -4712,7 +4714,7 @@ class RunDetailState(rx.State):
                 self.was_deleted = True
             else:
                 self.action_error = _redact_action(
-                    f"Run '{self.current_run_id}' not found in {history_dir}."
+                    f"Run '{self.current_run_id}' not found in the run history."
                 )
                 self.action_result = ""
         except Exception as exc:  # noqa: BLE001 — operator-facing string
@@ -4763,7 +4765,7 @@ class RunDetailState(rx.State):
             entry = manager.get_run(self.current_run_id)
             if entry is None:
                 self.action_error = _redact_action(
-                    f"Run '{self.current_run_id}' not found in {history_dir}."
+                    f"Run '{self.current_run_id}' not found in the run history."
                 )
                 self.action_result = ""
                 return

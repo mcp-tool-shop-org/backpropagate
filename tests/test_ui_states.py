@@ -1564,8 +1564,8 @@ class TestRunDetailActionStringsRedactPaths:
             )
 
     def test_delete_run_not_found_error_redacts_history_dir(self, monkeypatch):
-        """delete_run's not-found branch embeds ``history_dir`` (home+user) —
-        it must be redacted before reaching ``action_error``.
+        """delete_run's not-found branch must not put the history folder
+        (home+user) into ``action_error``.
         """
         from backpropagate import checkpoints as _ck
         from backpropagate.ui_state import RunDetailState
@@ -1591,9 +1591,9 @@ class TestRunDetailActionStringsRedactPaths:
 
         assert state.action_error, "expected a not-found error message"
         self._assert_no_home_leak(state.action_error, "delete_run not-found")
-        assert "<redacted-path>" in state.action_error, (
-            "V2-a: the redacted history_dir should surface as <redacted-path>."
-        )
+        # The message no longer names the folder at all (it used to, redacted).
+        assert "<redacted-path>" not in state.action_error
+        assert "not found in the run history" in state.action_error
 
     def test_delete_run_exception_redacts_oserror_path(self, monkeypatch):
         """A raw OSError repr (``[Errno 2] … '/home/<user>/…'``) must be
@@ -1755,7 +1755,8 @@ class TestUiPathFieldsNotClientSerialized:
         assert str(_Path.home()) not in disp, (
             f"UI-A-002: checkpoint_path_display leaks the home dir: {disp!r}"
         )
-        assert "<redacted-path>" in disp
+        # Outside the UI output folder only the folder's own name is shown.
+        assert disp == "ckpt"
 
     def test_cache_dir_display_redacts_home(self):
         from pathlib import Path as _Path

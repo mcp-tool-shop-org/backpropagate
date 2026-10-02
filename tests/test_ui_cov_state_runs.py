@@ -357,9 +357,12 @@ class TestRunDetailLoad:
         assert any("<redacted-path>" in line for line in s.log_lines)
         assert not any("alice" in line for line in s.log_lines)
         assert "plain line" in s.log_lines
-        # the full checkpoint path stays server-side; the client-facing var is redacted
+        # the full checkpoint path stays server-side; the client sees it relative
+        # to the UI output folder (never the home folder)
         assert s._checkpoint_path == str(cp)
-        assert s.checkpoint_path_display == us._redact_action(str(cp))
+        assert s.checkpoint_path_display == us._display_output_path(str(cp))
+        assert str(sandbox.home) not in s.checkpoint_path_display
+        assert s.checkpoint_path_display.endswith(cp.name)
 
     def test_long_values_are_truncated_in_the_hyperparameter_table(self, sandbox, monkeypatch):
         _seed(sandbox, run_id="longval", failure_reason="x" * 500,

@@ -662,42 +662,54 @@ def sideload_sign(msix: Path) -> None:
     pwsh = shutil.which("pwsh") or shutil.which("powershell")
     if pwsh is None:
         raise RuntimeError("no pwsh/powershell found for self-signing")
+    # Find signtool before any key exists, so a missing SDK cannot strand one.
+    signtool = _find_sdk_tool("signtool.exe")
     cert_dir = msix.parent / "sideload-cert"
     cert_dir.mkdir(exist_ok=True)
     pfx = cert_dir / "backpropagate-sideload.pfx"
     cer = cert_dir / "backpropagate-sideload.cer"
     password = "sideload-test"  # nosec B105 - throwaway password for the local self-signed test cert, not a shipped secret
+    friendly = "backpropagate sideload test"
     create = (
         "$p = ConvertTo-SecureString -String '" + password + "' -Force -AsPlainText; "
         f"$c = New-SelfSignedCertificate -Type Custom -Subject '{IDENTITY_PUBLISHER}' "
-        "-KeyUsage DigitalSignature -FriendlyName 'backpropagate sideload test' "
+        f"-KeyUsage DigitalSignature -FriendlyName '{friendly}' "
         "-CertStoreLocation Cert:\\CurrentUser\\My "
         "-TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3'); "
         f"Export-PfxCertificate -Cert $c -FilePath '{pfx}' -Password $p | Out-Null; "
         f"Export-Certificate -Cert $c -FilePath '{cer}' | Out-Null; "
         "Write-Output $c.Thumbprint"
     )
-    created = subprocess.run(  # nosec B603 - fixed internal argv
-        [pwsh, "-NoProfile", "-Command", create], check=True, capture_output=True, text=True
-    )
-    thumbprints = re.findall(r"\b[0-9A-Fa-f]{40}\b", created.stdout)
-    if not thumbprints:
-        raise RuntimeError(
-            "could not read the self-signed cert thumbprint from pwsh output: "
-            f"{created.stdout!r}"
-        )
-    thumbprint = thumbprints[-1].upper()
-    signtool = _find_sdk_tool("signtool.exe")
+    thumbprint: str | None = None
     try:
+        created = subprocess.run(  # nosec B603 - fixed internal argv
+            [pwsh, "-NoProfile", "-Command", create], check=True, capture_output=True, text=True
+        )
+        thumbprints = re.findall(r"\b[0-9A-Fa-f]{40}\b", created.stdout)
+        if not thumbprints:
+            raise RuntimeError(
+                "could not read the self-signed cert thumbprint from pwsh output: "
+                f"{created.stdout!r}"
+            )
+        thumbprint = thumbprints[-1].upper()
         _run([str(signtool), "sign", "/fd", "sha256", "/a", "/f", str(pfx), "/p", password, str(msix)])
     finally:
-        # Destroy the signing key even when signing fails: a usable key for the
+        # Destroy the signing key on every exit path (signing failed, the
+        # thumbprint was unreadable, the export half-ran): a usable key for the
         # Store publisher CN must not remain on disk. -DeleteKey wipes the key
-        # material along with the cert.
+        # material along with the cert. Without a thumbprint, remove this
+        # script's own throwaway certs by their friendly name instead.
         pfx.unlink(missing_ok=True)
-        subprocess.run(  # nosec B603 - fixed internal argv; removes only the cert created above
-            [pwsh, "-NoProfile", "-Command",
-             f"Remove-Item 'Cert:\\CurrentUser\\My\\{thumbprint}' -DeleteKey -Force"],
+        if thumbprint is not None:
+            remove = f"Remove-Item 'Cert:\\CurrentUser\\My\\{thumbprint}' -DeleteKey -Force"
+        else:
+            remove = (
+                "Get-ChildItem Cert:\\CurrentUser\\My | "
+                f"Where-Object {{ $_.FriendlyName -eq '{friendly}' }} | "
+                "Remove-Item -DeleteKey -Force"
+            )
+        subprocess.run(  # nosec B603 - fixed internal argv; removes only certs this script created
+            [pwsh, "-NoProfile", "-Command", remove],
             check=True, capture_output=True, text=True,
         )
     print(

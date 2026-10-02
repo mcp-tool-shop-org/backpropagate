@@ -263,14 +263,42 @@ class TestSideloadSign:
         assert f'Remove-Item "{cer}"' in out
         assert "private" in out and "deleted" in out
 
-    def test_missing_thumbprint_refuses(self, mod, tmp_path, monkeypatch):
+    def test_missing_thumbprint_refuses_and_still_destroys_the_key(
+        self, mod, tmp_path, monkeypatch
+    ):
         calls: list[list[str]] = []
         monkeypatch.setattr(mod.shutil, "which", lambda name: "pwsh")
+        monkeypatch.setattr(mod, "_find_sdk_tool", lambda name: Path("signtool.exe"))
         monkeypatch.setattr(mod.subprocess, "run", self._fake_run(calls, ok=False))
         msix = tmp_path / "x.msix"
         msix.write_bytes(b"msix")
         with pytest.raises(RuntimeError, match="thumbprint"):
             mod.sideload_sign(msix)
+
+        assert not (tmp_path / "sideload-cert" / "backpropagate-sideload.pfx").exists()
+        # No thumbprint to target: the script's own throwaway certs are
+        # removed by their friendly name instead.
+        sweeps = [c for c in calls if "Get-ChildItem Cert:" in c[-1]]
+        assert len(sweeps) == 1
+        assert "'backpropagate sideload test'" in sweeps[0][-1]
+        assert "-DeleteKey" in sweeps[0][-1]
+
+    def test_missing_signtool_creates_no_key(self, mod, tmp_path, monkeypatch):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(mod.shutil, "which", lambda name: "pwsh")
+
+        def no_sdk(name):
+            raise RuntimeError("Windows SDK not found")
+
+        monkeypatch.setattr(mod, "_find_sdk_tool", no_sdk)
+        monkeypatch.setattr(mod.subprocess, "run", self._fake_run(calls))
+        msix = tmp_path / "x.msix"
+        msix.write_bytes(b"msix")
+        with pytest.raises(RuntimeError, match="SDK"):
+            mod.sideload_sign(msix)
+
+        assert not any("New-SelfSignedCertificate" in c[-1] for c in calls)
+        assert not (tmp_path / "sideload-cert" / "backpropagate-sideload.pfx").exists()
 
     def test_sign_failure_still_destroys_the_key(self, mod, tmp_path, monkeypatch):
         calls: list[list[str]] = []

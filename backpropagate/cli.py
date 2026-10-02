@@ -4164,7 +4164,10 @@ def cmd_ui(args: argparse.Namespace) -> int:
     # uploaded_files/ ... into its cwd, and read-only install locations (the
     # Store MSIX layout is the forcing case) must stay pristine. Since v1.8.2
     # the Reflex cwd is a per-user working directory holding a stub rxconfig
-    # rendered from the package template — see ui_workdir.ensure_ui_workdir.
+    # rendered from the package template. If that folder cannot be created,
+    # a writable source checkout may still run from the package directory;
+    # a read-only package raises RUNTIME_UI_WORKDIR_UNAVAILABLE and is not
+    # written. See ui_workdir.prepare_ui_cwd.
     package_dir = Path(__file__).resolve().parent
     rx_config = package_dir / "rxconfig.py"
     if not rx_config.exists():
@@ -4178,19 +4181,9 @@ def cmd_ui(args: argparse.Namespace) -> int:
         )
         return EXIT_RUNTIME_ERROR
 
-    from .ui_workdir import ensure_ui_workdir
+    from .ui_workdir import prepare_ui_cwd
 
-    try:
-        ui_cwd = ensure_ui_workdir(package_dir, warn=_print_warning)
-    except OSError as _wd_exc:
-        # Per-user cache unwritable (locked-down profile, full disk, ...):
-        # fall back to the pre-1.8.2 behavior rather than refusing to launch.
-        _print_warning(
-            f"Could not prepare the per-user UI working directory ({_wd_exc}); "
-            "running Reflex from the package directory instead "
-            "(it must be writable)."
-        )
-        ui_cwd = package_dir
+    ui_cwd = prepare_ui_cwd(package_dir, warn=_print_warning)
 
     # CLIUI-B-004 (Stage C proactive): port pre-flight. Reflex runs in
     # production mode on the single --port (the backend serves the compiled
@@ -4664,7 +4657,15 @@ def cmd_config(args: argparse.Namespace) -> int:
         print(f"\n{Colors.BOLD}Model{Colors.RESET}")
         _print_kv("name", settings.model.name)
         _print_kv("max_seq_length", str(settings.model.max_seq_length))
-        _print_kv("trust_remote_code", str(settings.model.trust_remote_code))
+        from .config import is_store_edition
+
+        if is_store_edition():
+            _print_kv(
+                "trust_remote_code",
+                "False (Store edition ignores the opt-in)",
+            )
+        else:
+            _print_kv("trust_remote_code", str(settings.model.trust_remote_code))
 
         print(f"\n{Colors.BOLD}LoRA{Colors.RESET}")
         _print_kv("r", str(settings.lora.r))

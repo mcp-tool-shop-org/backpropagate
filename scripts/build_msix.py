@@ -37,6 +37,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 import zipfile
@@ -72,8 +73,60 @@ LLAMACPP_COMMIT = "f11d642a27b921cf22b6a8beb1b899f960fedcde"
 LLAMACPP_ARCHIVE_URL = (
     f"https://github.com/ggml-org/llama.cpp/archive/refs/tags/{LLAMACPP_TAG}.zip"
 )
-LLAMACPP_CONVERTER_SHA256 = "e9a1da876330bbce9687541ab31736542a01b4ac43c6686126514a50f122fb7f"
-LLAMACPP_GGUF_INIT_SHA256 = "3ccfc0104cd7ea88c6028743b7bf3f2c89b5f474425de03a217a6072320d7c2f"
+# SHA-256 of every file stage_llamacpp copies out of the tag archive:
+# LICENSE, convert_hf_to_gguf.py, and every file under gguf-py/gguf/.
+# Computed 2026-10-02 from the GitHub tag archive of b11323 after
+# https://api.github.com/repos/ggml-org/llama.cpp/git/refs/tags/b11323
+# resolved that tag to LLAMACPP_COMMIT. The zip digest is not the pin:
+# GitHub does not promise a tag archive stays byte-identical. Regenerate
+# with: python scripts/build_msix.py --print-llamacpp-manifest
+LLAMACPP_MANIFEST: dict[str, str] = {
+    "LICENSE":
+        "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+    "convert_hf_to_gguf.py":
+        "e9a1da876330bbce9687541ab31736542a01b4ac43c6686126514a50f122fb7f",
+    "gguf-py/gguf/__init__.py":
+        "3ccfc0104cd7ea88c6028743b7bf3f2c89b5f474425de03a217a6072320d7c2f",
+    "gguf-py/gguf/constants.py":
+        "9fb6729dcc99fae97fe66c9c22fe246455dec36258d816986c32a5d3d74fc47f",
+    "gguf-py/gguf/gguf.py":
+        "f0c0eeedad0911784b52ffed8e162a0eb5ae6d535ce35705bc16196e46597a72",
+    "gguf-py/gguf/gguf_reader.py":
+        "d0ea743200e19d7ef0a4c969edcc4a6dba8e3656a790b217e3bdc7b31170718e",
+    "gguf-py/gguf/gguf_writer.py":
+        "ae45f02b8522e00e054fdc6855cc368068c966a510d05cbcbb6a063620b31b22",
+    "gguf-py/gguf/lazy.py":
+        "dbc98e3ee9ef8606df34e9d91f98ab29c2697e6824995f1dd8952938c135ad85",
+    "gguf-py/gguf/metadata.py":
+        "7cedac3b8457271a3f58e5531a7e6958fdecb9ea072f7895ba5d7f6693c9db29",
+    "gguf-py/gguf/py.typed":
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "gguf-py/gguf/quants.py":
+        "2c927a1b3d9f0920dcf4007fb686e1b0999333e9f65ce43dcc689900c0beae8b",
+    "gguf-py/gguf/scripts/gguf_convert_endian.py":
+        "6be91de3af4d9b3fc2c90dafb3d1d8eed7e9dd72b3d6b52d245f005c76ece280",
+    "gguf-py/gguf/scripts/gguf_dump.py":
+        "d8b8fc28e96d15d8a4d6f05cdff4a747f5a06f31172efee9dfc971998ed0203f",
+    "gguf-py/gguf/scripts/gguf_editor_gui.py":
+        "6e9d70e850268fff5d4108d9ecbc2b4d90e70b61f08e71f7d37ac20916d854bb",
+    "gguf-py/gguf/scripts/gguf_hash.py":
+        "9f277c9338d12a73857a4e54683d7da4d5de01531751f14401267c9289e4197f",
+    "gguf-py/gguf/scripts/gguf_new_metadata.py":
+        "972499d35957b4721b9243828d5547d1c84def8d4e6fc641887c6578bf765255",
+    "gguf-py/gguf/scripts/gguf_set_metadata.py":
+        "c8612a7109428a677ea55976dd5eeed6088934ddef7ef01246a5bc7a6e585b3b",
+    "gguf-py/gguf/tensor_mapping.py":
+        "04e9d04249cb1e440b08fed170d389604f573f2ae0902c8a96206bfa61389ec7",
+    "gguf-py/gguf/utility.py":
+        "da920e2c62166ec9f30e407e9fb35ec29fda671310ffbf0f8ce856b62f1c70d7",
+    "gguf-py/gguf/vocab.py":
+        "353c35e8a52c2afdd113a7a8ce0ddade6cf9b5bb9cf150f965269ea41af3e5fd",
+}
+
+# Written next to the embedded python.exe. backpropagate.config reads it
+# relative to sys.executable; sitecustomize.py (below) also sees it.
+STORE_EDITION_MARKER_NAME = "backpropagate-store-edition"
+STORE_EDITION_MARKER_TEXT = "store-edition\n"
 
 # Package identity (Partner Center product 9MVXLZVL3TMT). Values are
 # case-sensitive; re-read the Publisher on the Product identity page before a
@@ -88,30 +141,40 @@ DISPLAY_NAME = "backpropagate"
 SIZE_CAP_BYTES = 20 * 1024**3  # 20 GiB; the Store cap is 25 GB (decimal)
 MAX_PATH_LIMIT = 259  # usable chars under MAX_PATH=260 (excluding NUL)
 
-NOTICES = [
+# (title, url or None, sha256 of the fetched body or None).
+# None url: backpropagate's own LICENSE, or the llama.cpp LICENSE taken
+# from the manifest-checked archive. A fetched body is hash-checked by
+# _fetch on every build. Digests computed 2026-10-02 from the tag URLs.
+NOTICES: list[tuple[str, str | None, str | None]] = [
     (
         "backpropagate (MIT)",
         None,  # local: <repo>/LICENSE
+        None,
     ),
     (
         "CPython (PSF License)",
         "https://raw.githubusercontent.com/python/cpython/v3.12.10/LICENSE",
+        "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf",
     ),
     (
         "PyTorch (BSD-3-Clause)",
         "https://raw.githubusercontent.com/pytorch/pytorch/v2.12.1/LICENSE",
+        "bd018feef8825e88181c84eb7e3aa4eafb8f08a20d9fd6ef948569610c4a3e43",
     ),
     (
         "bun (MIT)",
         "https://raw.githubusercontent.com/oven-sh/bun/bun-v1.3.13/LICENSE.md",
+        "b0e163c004bffb092b08f657a1f6e65b6af64cf62765230717a0ed48a3e562de",
     ),
     (
         "Reflex (MIT)",
         "https://raw.githubusercontent.com/reflex-dev/reflex/v0.9.5.post2/LICENSE",
+        "770df32eba7d7f939b0fb92a4b7daf59f85c2267cee763cc991aafb71abf6041",
     ),
     (
         "llama.cpp (MIT)",
         None,  # taken from the extracted archive (shipped in App/vendor too)
+        None,
     ),
 ]
 
@@ -189,8 +252,18 @@ baked in, because the WindowsApps install prefix changes with every version.
 import os as _os
 from pathlib import Path as _Path
 
-# .../App/python/Lib/site-packages/sitecustomize.py -> App/
-_app_root = _Path(__file__).resolve().parents[3]
+# .../App/python/Lib/site-packages/sitecustomize.py -> App/python
+_python_dir = _Path(__file__).resolve().parents[2]
+_app_root = _python_dir.parent
+
+# Store edition: the marker next to python.exe is the source of truth
+# (backpropagate.config reads it relative to sys.executable). Overwrite the
+# caller's opt-in as well, so the environment this process inherited cannot
+# turn model-repository code on. A later assignment in the same process is
+# still refused when settings are built, because the marker is in the package.
+_marker = _python_dir / "backpropagate-store-edition"
+if _marker.is_file():
+    _os.environ["BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE"] = "false"
 
 _llama = _app_root / "vendor" / "llama.cpp"
 if (_llama / "convert_hf_to_gguf.py").is_file():
@@ -433,7 +506,21 @@ def stage_python(downloads: Path, stage: Path) -> Path:
     exe = py_home / "python.exe"
     result = _run([str(exe), "-c", "import sys, site; print(sys.version)"], capture_output=True, text=True)
     _log(f"embedded python: {result.stdout.strip().splitlines()[0]}")
+    stage_store_edition_marker(py_home)
     return exe
+
+
+def stage_store_edition_marker(python_home: Path) -> Path:
+    """Write the Store-edition marker next to the embedded interpreter.
+
+    ``backpropagate.config.is_store_edition`` reads this file relative to
+    ``sys.executable``. It lives inside the package, so clearing an
+    environment variable cannot turn the edition off.
+    """
+    dest = Path(python_home) / STORE_EDITION_MARKER_NAME
+    dest.write_text(STORE_EDITION_MARKER_TEXT, encoding="utf-8")
+    _log(f"store edition: marker {dest.name}")
+    return dest
 
 
 def install_dependencies(repo: Path, downloads: Path, stage: Path, python_exe: Path) -> dict:
@@ -503,46 +590,147 @@ def stage_payload(repo: Path, stage: Path, python_exe: Path, work: Path, reuse: 
     return {"payload": meta}
 
 
-def stage_llamacpp(downloads: Path, stage: Path) -> dict:
-    archive = downloads / f"llama.cpp-{LLAMACPP_TAG}.zip"
-    if not archive.is_file():
-        # Tags move; verify the pin still resolves to the recorded commit.
-        with urllib.request.urlopen(  # noqa: S310 — fixed https URL  # nosec B310
-            f"https://api.github.com/repos/ggml-org/llama.cpp/git/refs/tags/{LLAMACPP_TAG}",
-            timeout=60,
-        ) as resp:
-            sha = json.loads(resp.read().decode())["object"]["sha"]
-        if sha != LLAMACPP_COMMIT:
-            raise RuntimeError(
-                f"llama.cpp tag {LLAMACPP_TAG} moved: {sha} != pinned {LLAMACPP_COMMIT}"
-            )
-        _log(f"llama.cpp: fetching archive {LLAMACPP_TAG} (commit verified)")
-        with urllib.request.urlopen(LLAMACPP_ARCHIVE_URL, timeout=300) as resp:  # noqa: S310  # nosec B310 — tag pinned + per-file hashes verified below
-            data = resp.read()
-        archive.write_bytes(data)
-    root_prefix = f"llama.cpp-{LLAMACPP_TAG}/"
+def _llamacpp_root(tag: str) -> str:
+    return f"llama.cpp-{tag}/"
+
+
+def _copied_llamacpp_rel(rel: str) -> bool:
+    return (
+        rel == "LICENSE"
+        or rel == "convert_hf_to_gguf.py"
+        or (rel.startswith("gguf-py/gguf/") and not rel.endswith("/"))
+    )
+
+
+def llamacpp_archive_members(zf: zipfile.ZipFile, tag: str) -> dict[str, bytes]:
+    """Files this build copies: LICENSE, the converter, and gguf-py/gguf/*."""
+    root = _llamacpp_root(tag)
+    files: dict[str, bytes] = {}
+    for name in zf.namelist():
+        if not name.startswith(root) or name.endswith("/"):
+            continue
+        rel = name[len(root):]
+        if not _copied_llamacpp_rel(rel):
+            continue
+        if Path(rel).is_absolute() or ".." in Path(rel).parts:
+            raise RuntimeError(f"llama.cpp archive has an unsafe path: {rel}")
+        files[rel] = zf.read(name)
+    return files
+
+
+def verify_llamacpp_manifest(files: dict[str, bytes], manifest: dict[str, str]) -> None:
+    """Fail if the copied set is not exactly the pinned path/sha256 map."""
+    extra = sorted(set(files) - set(manifest))
+    missing = sorted(set(manifest) - set(files))
+    changed = sorted(
+        rel
+        for rel, data in files.items()
+        if rel in manifest and hashlib.sha256(data).hexdigest() != manifest[rel]
+    )
+    if not (extra or missing or changed):
+        return
+    parts: list[str] = []
+    if changed:
+        parts.append("changed: " + ", ".join(changed))
+    if extra:
+        parts.append("not in manifest: " + ", ".join(extra))
+    if missing:
+        parts.append("missing: " + ", ".join(missing))
+    raise RuntimeError("llama.cpp manifest mismatch (" + "; ".join(parts) + ")")
+
+
+def format_llamacpp_manifest(
+    files: dict[str, bytes], *, tag: str | None = None, commit: str | None = None
+) -> str:
+    """Sorted ``path sha256`` lines, optional tag/commit comment first."""
+    lines: list[str] = []
+    if tag is not None:
+        lines.append(f"# tag {tag} commit {commit or 'unverified'}")
+    for rel, data in sorted(files.items()):
+        lines.append(f"{rel} {hashlib.sha256(data).hexdigest()}")
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def llamacpp_manifest_text(archive: Path, tag: str, *, commit: str | None = None) -> str:
+    with zipfile.ZipFile(archive) as zf:
+        files = llamacpp_archive_members(zf, tag)
+    return format_llamacpp_manifest(files, tag=tag, commit=commit)
+
+
+def verify_llamacpp_tag_commit(tag: str, commit: str) -> None:
+    """The tag ref must still point at the recorded commit. Run on fetch."""
+    url = f"https://api.github.com/repos/ggml-org/llama.cpp/git/refs/tags/{tag}"
+    with urllib.request.urlopen(url, timeout=60) as resp:  # noqa: S310 — fixed https URL  # nosec B310
+        sha = json.loads(resp.read().decode())["object"]["sha"]
+    if sha != commit:
+        raise RuntimeError(f"llama.cpp tag {tag} moved: {sha} != pinned {commit}")
+
+
+def fetch_llamacpp_archive(dest: Path, tag: str, *, commit: str | None) -> Path:
+    """Download the tag zip. When ``commit`` is set, check the tag ref first."""
+    if commit is not None:
+        verify_llamacpp_tag_commit(tag, commit)
+        _log(f"llama.cpp: fetching archive {tag} (commit verified)")
+    else:
+        _log(f"llama.cpp: fetching archive {tag}")
+    if tag == LLAMACPP_TAG:
+        url = LLAMACPP_ARCHIVE_URL
+    else:
+        url = f"https://github.com/ggml-org/llama.cpp/archive/refs/tags/{tag}.zip"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    # The tag ref was checked when a commit pin was supplied. Every copied
+    # file is hash-checked by verify_llamacpp_manifest after this returns.
+    with urllib.request.urlopen(url, timeout=300) as resp:  # noqa: S310  # nosec B310 — tag ref checked when pinned; copied-file hashes checked by caller
+        data = resp.read()
+    tmp.write_bytes(data)
+    os.replace(tmp, dest)
+    return dest
+
+
+def stage_llamacpp_files(files: dict[str, bytes], stage: Path) -> None:
     vendor = stage / "App" / "vendor" / "llama.cpp"
     if vendor.exists():
         shutil.rmtree(vendor)
-    (vendor / "gguf-py").mkdir(parents=True)
+    for rel, data in sorted(files.items()):
+        dest = vendor / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+
+
+def stage_llamacpp(downloads: Path, stage: Path) -> dict:
+    archive = downloads / f"llama.cpp-{LLAMACPP_TAG}.zip"
+    if not archive.is_file():
+        fetch_llamacpp_archive(archive, LLAMACPP_TAG, commit=LLAMACPP_COMMIT)
     with zipfile.ZipFile(archive) as zf:
-        converter = zf.read(root_prefix + "convert_hf_to_gguf.py")
-        gguf_init = zf.read(root_prefix + "gguf-py/gguf/__init__.py")
-        license_bytes = zf.read(root_prefix + "LICENSE")
-        (vendor / "convert_hf_to_gguf.py").write_bytes(converter)
-        (vendor / "LICENSE").write_bytes(license_bytes)
-        for name in zf.namelist():
-            if name.startswith(root_prefix + "gguf-py/gguf/") and not name.endswith("/"):
-                rel = name[len(root_prefix):]
-                dest = vendor / rel
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_bytes(zf.read(name))
-    if hashlib.sha256(converter).hexdigest() != LLAMACPP_CONVERTER_SHA256:
-        raise RuntimeError("llama.cpp convert_hf_to_gguf.py hash drifted vs the pin")
-    if hashlib.sha256(gguf_init).hexdigest() != LLAMACPP_GGUF_INIT_SHA256:
-        raise RuntimeError("llama.cpp gguf-py/gguf/__init__.py hash drifted vs the pin")
-    _log(f"llama.cpp: {LLAMACPP_TAG} staged (per-file hashes verified)")
+        files = llamacpp_archive_members(zf, LLAMACPP_TAG)
+    # Cached archive or a fresh download: every copied byte is checked.
+    verify_llamacpp_manifest(files, LLAMACPP_MANIFEST)
+    stage_llamacpp_files(files, stage)
+    _log(f"llama.cpp: {LLAMACPP_TAG} staged ({len(files)} files, manifest verified)")
     return {"llama_cpp": {"tag": LLAMACPP_TAG, "commit": LLAMACPP_COMMIT}}
+
+
+def render_llamacpp_manifest_for_tag(tag: str) -> str:
+    """Fetch ``tag`` and return the manifest text for the next pin bump.
+
+    The pinned tag is commit-checked. Another tag is fetched as-is; the
+    comment line carries that tag's current commit when the ref API answers.
+    """
+    commit = LLAMACPP_COMMIT if tag == LLAMACPP_TAG else None
+    dest = Path(tempfile.gettempdir()) / f"llama.cpp-{tag}-manifest.zip"
+    if dest.exists():
+        dest.unlink()
+    fetch_llamacpp_archive(dest, tag, commit=commit)
+    resolved = commit
+    if resolved is None:
+        try:
+            url = f"https://api.github.com/repos/ggml-org/llama.cpp/git/refs/tags/{tag}"
+            with urllib.request.urlopen(url, timeout=60) as resp:  # noqa: S310 — fixed https API  # nosec B310
+                resolved = json.loads(resp.read().decode())["object"]["sha"]
+        except (OSError, ValueError, KeyError):
+            resolved = None
+    return llamacpp_manifest_text(dest, tag, commit=resolved)
 
 
 def stage_launcher(stage: Path, downloads: Path) -> None:
@@ -584,16 +772,25 @@ def stage_assets(repo: Path, stage: Path) -> None:
     _log(f"assets: {len(targets)} logos generated (pad color {bg})")
 
 
-def stage_notices(repo: Path, stage: Path) -> None:
+def _notice_cache_name(title: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", title).strip("-").lower()
+    return f"notice-{slug}.txt"
+
+
+def stage_notices(repo: Path, stage: Path, downloads: Path) -> None:
     parts: list[str] = []
-    for title, source in NOTICES:
+    downloads.mkdir(parents=True, exist_ok=True)
+    for title, source, digest in NOTICES:
         if source is None and title.startswith("backpropagate"):
             text = (repo / "LICENSE").read_text(encoding="utf-8")
         elif source is None:  # llama.cpp — from the staged vendor copy
             text = (stage / "App" / "vendor" / "llama.cpp" / "LICENSE").read_text(encoding="utf-8")
         else:
-            with urllib.request.urlopen(source, timeout=60) as resp:  # noqa: S310 — pinned tag URL  # nosec B310
-                text = resp.read().decode("utf-8")
+            if not digest:
+                raise RuntimeError(f"notice {title!r} is fetched but has no SHA-256 pin")
+            dest = downloads / _notice_cache_name(title)
+            _fetch(source, dest, digest, label=f"notice:{title}")
+            text = dest.read_text(encoding="utf-8")
         parts.append(f"{'=' * 78}\n{title}\n{'=' * 78}\n\n{text.strip()}\n")
     (stage / "THIRD_PARTY_NOTICES.txt").write_text(
         "backpropagate Microsoft Store package — third-party notices\n\n"
@@ -628,7 +825,11 @@ def write_manifest_and_info(stage: Path, msix_ver: str, meta: dict, total_bytes:
             "min_nvidia_driver": MIN_NVIDIA_DRIVER,
             "gate": meta.get("torch_gate"),
         },
-        "llama_cpp": {"tag": LLAMACPP_TAG, "commit": LLAMACPP_COMMIT},
+        "llama_cpp": {
+            "tag": LLAMACPP_TAG,
+            "commit": LLAMACPP_COMMIT,
+            "files": len(LLAMACPP_MANIFEST),
+        },
         "ui_payload": meta.get("payload"),
         "built_wheel": meta.get("built_wheel"),
         "size_bytes": total_bytes,
@@ -729,17 +930,35 @@ def sideload_sign(msix: Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parent.parent)
-    parser.add_argument("--out", type=Path, required=True, help="output dir for the msix + caches")
+    parser.add_argument("--out", type=Path, default=None, help="output dir for the msix + caches")
     parser.add_argument("--reuse-payload", type=Path, default=None,
                         help="reuse an existing ui_frontend_payload dir instead of rebuilding")
     parser.add_argument("--sideload-test", action="store_true",
                         help="self-sign the msix for LOCAL sideload verification (never for the Store upload)")
     parser.add_argument("--pack-only", type=Path, default=None,
                         help="skip staging; pack an existing stage dir (gates re-run)")
+    parser.add_argument(
+        "--print-llamacpp-manifest",
+        action="store_true",
+        help="fetch a llama.cpp tag and print the copied-file SHA-256 manifest, then exit",
+    )
+    parser.add_argument(
+        "--llamacpp-tag",
+        default=None,
+        help="tag for --print-llamacpp-manifest (default: the pinned tag)",
+    )
     args = parser.parse_args(argv)
+
+    if args.print_llamacpp_manifest:
+        tag = args.llamacpp_tag or LLAMACPP_TAG
+        sys.stdout.write(render_llamacpp_manifest_for_tag(tag))
+        return 0
 
     if os.name != "nt":
         print("build_msix.py must run on Windows", file=sys.stderr)
+        return 2
+    if args.out is None:
+        print("build_msix.py: --out is required", file=sys.stderr)
         return 2
     t0 = time.monotonic()
     repo = args.repo.resolve()
@@ -772,7 +991,7 @@ def main(argv: list[str] | None = None) -> int:
         meta.update(stage_llamacpp(downloads, stage))
         stage_launcher(stage, downloads)
         stage_assets(repo, stage)
-        stage_notices(repo, stage)
+        stage_notices(repo, stage, downloads)
 
     total_bytes = sum(f.stat().st_size for f in stage.rglob("*") if f.is_file())
     check_size(total_bytes)

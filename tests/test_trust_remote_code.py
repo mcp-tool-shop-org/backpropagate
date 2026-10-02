@@ -305,3 +305,153 @@ class TestNeverPrompts:
 
         # has_local_code (native transformers implementation) + no opt-in: OK.
         assert resolve_trust_remote_code(False, "org/m", True, True) is False
+
+
+# ---------------------------------------------------------------------------
+# Store edition: the marker next to the interpreter ignores the opt-in.
+# A pip install has no marker, so the variable still works there.
+# ---------------------------------------------------------------------------
+
+
+def _place_store_marker(tmp_path: Path, monkeypatch) -> None:
+    """Point ``sys.executable`` at a fake interpreter with the Store marker."""
+    exe = tmp_path / "python.exe"
+    exe.write_bytes(b"")
+    (tmp_path / real_cfg.STORE_EDITION_MARKER_NAME).write_text(
+        "store-edition\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(sys, "executable", str(exe))
+
+
+def _exec_dataclass_config():
+    """Run config.py with pydantic-settings missing. Returns the fake module."""
+    sys.modules.setdefault("backpropagate", importlib.import_module("backpropagate"))
+    source = Path(real_cfg.__file__).read_text(encoding="utf-8")
+    fake = types.ModuleType("backpropagate._config_store_probe")
+    fake.__dict__["__file__"] = real_cfg.__file__
+    fake.__dict__["__name__"] = "backpropagate.config"
+    with patch.dict(sys.modules, {"pydantic_settings": None}):
+        exec(compile(source, real_cfg.__file__, "exec"), fake.__dict__)  # noqa: S102
+    assert fake.__dict__["PYDANTIC_SETTINGS_AVAILABLE"] is False
+    return fake
+
+
+class TestStoreEditionIgnoresOptIn:
+    def test_pydantic_env_assignment_and_constructor_stay_false(self, monkeypatch, tmp_path):
+        _place_store_marker(tmp_path, monkeypatch)
+        monkeypatch.setenv("BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE", "true")
+        assert real_cfg.is_store_edition() is True
+        built = real_cfg.ModelConfig()
+        assert built.trust_remote_code is False
+        built.trust_remote_code = True
+        assert built.trust_remote_code is False
+        assert real_cfg.ModelConfig(trust_remote_code=True).trust_remote_code is False
+
+    def test_pydantic_settings_ignore_env_and_dotenv(self, monkeypatch, tmp_path):
+        _place_store_marker(tmp_path, monkeypatch)
+        monkeypatch.delenv("BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE", raising=False)
+        (tmp_path / ".env").write_text(
+            "BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE=true\n", encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        assert real_cfg.Settings().model.trust_remote_code is False
+        monkeypatch.setenv("BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE", "true")
+        assert real_cfg.Settings().model.trust_remote_code is False
+
+    def test_dataclass_fallback_stays_false(self, monkeypatch, tmp_path):
+        _place_store_marker(tmp_path, monkeypatch)
+        monkeypatch.setenv("BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE", "true")
+        fake = _exec_dataclass_config()
+        model = fake.ModelConfig()
+        assert model.trust_remote_code is False
+        model.trust_remote_code = True
+        assert model.trust_remote_code is False
+        assert fake.ModelConfig(trust_remote_code=True).trust_remote_code is False
+        assert fake.Settings().model.trust_remote_code is False
+
+    def test_loader_receives_false(self, trust_setting, monkeypatch, tmp_path):
+        from backpropagate.trainer import Trainer
+
+        _place_store_marker(tmp_path, monkeypatch)
+        trust_setting(True)
+        with patch("torch.cuda.is_available", return_value=False), \
+             patch("transformers.AutoModelForCausalLM.from_pretrained") as m_model, \
+             patch("transformers.AutoTokenizer.from_pretrained", return_value=_fake_tokenizer()), \
+             patch("transformers.BitsAndBytesConfig"), \
+             patch("peft.prepare_model_for_kbit_training", return_value=MagicMock()), \
+             patch("peft.get_peft_model", return_value=MagicMock()), \
+             patch("peft.LoraConfig"):
+            Trainer(use_unsloth=False)._load_with_transformers()
+        assert m_model.call_args.kwargs["trust_remote_code"] is False
+
+    def test_hint_names_pip_and_not_the_variable(self, monkeypatch, tmp_path):
+        pip_hint = TrustRemoteCodeRequiredError("org/custom-model").suggestion or ""
+        _place_store_marker(tmp_path, monkeypatch)
+        store_hint = TrustRemoteCodeRequiredError("org/custom-model").suggestion or ""
+        assert pip_hint != store_hint
+        assert "BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE=true" in pip_hint
+        assert "does not run code that ships inside a model repository" in store_hint
+        assert "pip install backpropagate" in store_hint
+        assert "BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE" not in store_hint
+
+    def test_config_command_notes_the_ignored_opt_in(self, monkeypatch, tmp_path, capsys):
+        import argparse
+
+        from backpropagate.cli import cmd_config
+
+        _place_store_marker(tmp_path, monkeypatch)
+        monkeypatch.setenv("BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE", "true")
+        args = argparse.Namespace(show=False, set=None, reset=False, verbose=False)
+        assert cmd_config(args) == 0
+        out = capsys.readouterr().out
+        assert "False (Store edition ignores the opt-in)" in out
+
+    def test_config_command_without_marker_has_no_store_note(self, capsys):
+        import argparse
+
+        from backpropagate.cli import cmd_config
+
+        args = argparse.Namespace(show=False, set=None, reset=False, verbose=False)
+        assert cmd_config(args) == 0
+        assert "Store edition" not in capsys.readouterr().out
+
+    def test_resolve_error_is_not_the_store_edition(self, monkeypatch):
+        def boom(path):
+            raise OSError("resolve failed")
+
+        monkeypatch.setattr(real_cfg.os.path, "realpath", boom)
+        assert real_cfg.is_store_edition() is False
+
+    def test_marker_stat_error_is_not_the_store_edition(self, monkeypatch, tmp_path):
+        _place_store_marker(tmp_path, monkeypatch)
+
+        def boom(path):
+            raise OSError("stat failed")
+
+        monkeypatch.setattr(real_cfg.os.path, "isfile", boom)
+        assert real_cfg.is_store_edition() is False
+
+    def test_the_check_survives_a_patched_platform_name(self, monkeypatch, tmp_path):
+        # tests/test_cli*.py patch os.name to the other platform around CLI
+        # calls; the marker check must not build a Path for that platform.
+        _place_store_marker(tmp_path, monkeypatch)
+        monkeypatch.setattr(real_cfg.os, "name", "posix" if real_cfg.os.name == "nt" else "nt")
+        assert real_cfg.is_store_edition() is True
+
+
+class TestPipInstallStillOptsIn:
+    def test_settings_dotenv_opts_in_without_marker(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE", raising=False)
+        (tmp_path / ".env").write_text(
+            "BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE=true\n", encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        assert real_cfg.is_store_edition() is False
+        assert real_cfg.Settings().model.trust_remote_code is True
+
+    def test_dataclass_env_still_opts_in(self, monkeypatch):
+        monkeypatch.setenv("BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE", "true")
+        fake = _exec_dataclass_config()
+        assert fake.ModelConfig().trust_remote_code is True
+        assert fake.Settings().model.trust_remote_code is True
+        assert fake.ModelConfig(trust_remote_code=True).trust_remote_code is True

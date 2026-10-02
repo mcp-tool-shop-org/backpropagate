@@ -8,6 +8,7 @@ CLI ever would.
 
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -15,11 +16,14 @@ from pathlib import Path
 import pytest
 
 from backpropagate import __version__, ui_workdir
+from backpropagate.exceptions import BackpropagateError
 from backpropagate.ui_workdir import (
     WORKDIR_ENV_VAR,
     default_ui_work_root,
     ensure_ui_workdir,
     package_dir_key,
+    package_dir_writable,
+    prepare_ui_cwd,
 )
 
 PACKAGE_DIR = Path(ui_workdir.__file__).resolve().parent
@@ -212,3 +216,120 @@ class TestUiAssets:
     def test_package_without_assets_is_fine(self, tmp_path):
         ui_workdir.sync_ui_assets(tmp_path / "no-assets-pkg", tmp_path / "wd")
         assert not (tmp_path / "wd" / "assets").exists()
+
+
+def _forbid_package_writes(monkeypatch, pkg: Path) -> None:
+    """Raise if a write path is aimed at ``pkg`` or anything inside it."""
+    root = pkg.resolve()
+
+    def banned(path: Path) -> None:
+        try:
+            resolved = Path(path).resolve()
+        except OSError:
+            resolved = Path(path)
+        if resolved == root or root in resolved.parents:
+            raise AssertionError(f"write attempted in the package folder: {resolved}")
+
+    real_mkdir = Path.mkdir
+    real_write_text = Path.write_text
+    real_write_bytes = Path.write_bytes
+    real_copy2 = shutil.copy2
+
+    def mkdir(self, *args, **kwargs):
+        banned(self)
+        return real_mkdir(self, *args, **kwargs)
+
+    def write_text(self, *args, **kwargs):
+        banned(self)
+        return real_write_text(self, *args, **kwargs)
+
+    def write_bytes(self, *args, **kwargs):
+        banned(self)
+        return real_write_bytes(self, *args, **kwargs)
+
+    def copy2(src, dst, *args, **kwargs):
+        banned(Path(dst))
+        return real_copy2(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    monkeypatch.setattr(Path, "write_text", write_text)
+    monkeypatch.setattr(Path, "write_bytes", write_bytes)
+    monkeypatch.setattr(shutil, "copy2", copy2)
+
+
+def _deny_package_write_access(monkeypatch, pkg: Path) -> None:
+    real_access = os.access
+
+    def access(path, mode, *args, **kwargs):
+        try:
+            if Path(path).resolve() == pkg.resolve() and mode & os.W_OK:
+                return False
+        except OSError:
+            pass
+        return real_access(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(ui_workdir.os, "access", access)
+
+
+class TestReadOnlyPackage:
+    def test_uncreatable_user_dir_and_readonly_package_errors_without_writing(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.delenv(WORKDIR_ENV_VAR, raising=False)
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "rxconfig.py").write_text("template-bytes", encoding="utf-8")
+        (pkg / "assets").mkdir()
+        (pkg / "assets" / "logo.png").write_bytes(b"png")
+        before = {
+            p.relative_to(pkg): p.read_bytes() for p in pkg.rglob("*") if p.is_file()
+        }
+        blocker = tmp_path / "localappdata"
+        blocker.write_text("not-a-directory", encoding="utf-8")
+        # Both platform roots, so the per-user folder is blocked on Windows
+        # (LOCALAPPDATA) and on Linux / macOS (XDG_CACHE_HOME) alike.
+        monkeypatch.setenv("LOCALAPPDATA", str(blocker))
+        monkeypatch.setenv("XDG_CACHE_HOME", str(blocker))
+        _deny_package_write_access(monkeypatch, pkg)
+        _forbid_package_writes(monkeypatch, pkg)
+
+        with pytest.raises(BackpropagateError) as exc:
+            prepare_ui_cwd(pkg, version="1.8.2")
+
+        err = exc.value
+        assert err.code == "RUNTIME_UI_WORKDIR_UNAVAILABLE"
+        assert str(blocker) in err.message
+        assert "BACKPROPAGATE_UI_WORKDIR" in (err.suggestion or "")
+        after = {
+            p.relative_to(pkg): p.read_bytes() for p in pkg.rglob("*") if p.is_file()
+        }
+        assert after == before
+
+    def test_writable_checkout_falls_back_without_rewriting_the_template(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.delenv(WORKDIR_ENV_VAR, raising=False)
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "rxconfig.py").write_text("leave-me", encoding="utf-8")
+        blocker = tmp_path / "localappdata"
+        blocker.write_text("not-a-directory", encoding="utf-8")
+        # Both platform roots, so the per-user folder is blocked on Windows
+        # (LOCALAPPDATA) and on Linux / macOS (XDG_CACHE_HOME) alike.
+        monkeypatch.setenv("LOCALAPPDATA", str(blocker))
+        monkeypatch.setenv("XDG_CACHE_HOME", str(blocker))
+        messages: list[str] = []
+
+        got = prepare_ui_cwd(pkg, version="1.8.2", warn=messages.append)
+
+        assert got == pkg
+        assert (pkg / "rxconfig.py").read_text(encoding="utf-8") == "leave-me"
+        assert any("package directory" in message for message in messages)
+        assert any(str(blocker) in message for message in messages)
+
+    def test_access_error_treats_the_package_as_not_writable(self, monkeypatch, tmp_path):
+        def boom(*_a, **_k):
+            raise OSError("acl")
+
+        monkeypatch.setattr(ui_workdir.os, "access", boom)
+        assert package_dir_writable(tmp_path) is False

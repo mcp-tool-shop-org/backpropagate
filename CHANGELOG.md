@@ -268,6 +268,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **The Microsoft Store edition never runs code that ships inside a model
+  repository.** A marker inside the package keeps `trust_remote_code` off
+  whatever the environment, a `.env` file or a later assignment says; a
+  model that needs such code fails with `CONFIG_TRUST_REMOTE_CODE_REQUIRED`
+  and a hint that names the pip install. The pip install keeps the opt-in.
+- **Every byte the Store build takes from llama.cpp is pinned** (a SHA-256
+  per copied file, checked on every build, cached archive included), and so
+  is each fetched licence text. `scripts/build_msix.py
+  --print-llamacpp-manifest` prints the manifest for the next pin bump.
+- **The UI no longer falls back to the installed package folder** when its
+  per-user working folder cannot be created and the package is read-only
+  (the Store layout): it stops with `RUNTIME_UI_WORKDIR_UNAVAILABLE` naming
+  the folder and `BACKPROPAGATE_UI_WORKDIR`.
 - **A HuggingFace token typed into the Export page is no longer written to
   disk.** The web UI's framework saves each browser session's state to
   `.states/` in the UI working directory, and that included the token field

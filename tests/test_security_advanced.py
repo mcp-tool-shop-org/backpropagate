@@ -773,9 +773,12 @@ class TestDefaultReflexCSP:
         assert "'unsafe-inline'" in DEFAULT_REFLEX_CSP.style_src
 
     def test_reflex_csp_allows_websocket(self):
-        """Reflex CSP allows WebSocket connections (the /_event endpoint)."""
-        assert "ws:" in DEFAULT_REFLEX_CSP.connect_src
-        assert "wss:" in DEFAULT_REFLEX_CSP.connect_src
+        """Reflex CSP allows the UI's own loopback WebSocket origins."""
+        assert "ws://127.0.0.1:7862" in DEFAULT_REFLEX_CSP.connect_src
+        assert "ws://localhost:7862" in DEFAULT_REFLEX_CSP.connect_src
+        assert "ws:" not in DEFAULT_REFLEX_CSP.connect_src
+        assert "wss:" not in DEFAULT_REFLEX_CSP.connect_src
+        assert "https:" not in DEFAULT_REFLEX_CSP.img_src
 
     def test_reflex_csp_allows_data_images(self):
         """Reflex CSP allows data: images (inline SVG data URIs)."""

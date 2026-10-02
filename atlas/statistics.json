@@ -69,7 +69,7 @@
       "confidence": "full",
       "highWater": null,
       "name": "backpropagate",
-      "qualifyingSourceCommits": 120,
+      "qualifyingSourceCommits": 123,
       "rebaseline": null
     },
     {
@@ -217,7 +217,7 @@
       "confidence": "full",
       "highWater": null,
       "name": "tests",
-      "qualifyingSourceCommits": 104,
+      "qualifyingSourceCommits": 107,
       "rebaseline": null
     }
   ],
@@ -355,8 +355,8 @@
         "path": ".trivyignore"
       },
       {
-        "commits": 96,
-        "lines": 1860,
+        "commits": 97,
+        "lines": 1877,
         "path": "CHANGELOG.md"
       },
       {
@@ -476,7 +476,7 @@
       },
       {
         "commits": 17,
-        "lines": 570,
+        "lines": 566,
         "path": "atlas/README.md"
       },
       {
@@ -486,17 +486,17 @@
       },
       {
         "commits": 17,
-        "lines": 2200,
+        "lines": 2188,
         "path": "atlas/page.json"
       },
       {
         "commits": 17,
-        "lines": 11814,
+        "lines": 11833,
         "path": "atlas/statistics.json"
       },
       {
         "commits": 17,
-        "lines": 48462,
+        "lines": 48282,
         "path": "atlas/structure.json"
       },
       {
@@ -815,13 +815,18 @@
         "path": "backpropagate/ui_app/__init__.py"
       },
       {
-        "commits": 20,
-        "lines": 551,
+        "commits": 1,
+        "lines": 87,
+        "path": "backpropagate/ui_app/access_log.py"
+      },
+      {
+        "commits": 21,
+        "lines": 557,
         "path": "backpropagate/ui_app/app.py"
       },
       {
-        "commits": 14,
-        "lines": 2012,
+        "commits": 15,
+        "lines": 2183,
         "path": "backpropagate/ui_app/auth.py"
       },
       {
@@ -920,18 +925,18 @@
         "path": "backpropagate/ui_app/help_text.py"
       },
       {
-        "commits": 4,
-        "lines": 196,
+        "commits": 5,
+        "lines": 210,
         "path": "backpropagate/ui_app/middleware/__init__.py"
       },
       {
-        "commits": 2,
-        "lines": 248,
+        "commits": 3,
+        "lines": 363,
         "path": "backpropagate/ui_app/middleware/healthz.py"
       },
       {
-        "commits": 3,
-        "lines": 730,
+        "commits": 4,
+        "lines": 807,
         "path": "backpropagate/ui_app/middleware/rate_limit.py"
       },
       {
@@ -940,8 +945,8 @@
         "path": "backpropagate/ui_app/middleware/request_logging.py"
       },
       {
-        "commits": 2,
-        "lines": 406,
+        "commits": 3,
+        "lines": 416,
         "path": "backpropagate/ui_app/middleware/security_headers.py"
       },
       {
@@ -1005,13 +1010,13 @@
         "path": "backpropagate/ui_marker_warmup.py"
       },
       {
-        "commits": 38,
-        "lines": 5118,
+        "commits": 40,
+        "lines": 5391,
         "path": "backpropagate/ui_security.py"
       },
       {
-        "commits": 46,
-        "lines": 9789,
+        "commits": 48,
+        "lines": 10184,
         "path": "backpropagate/ui_state.py"
       },
       {
@@ -3310,13 +3315,13 @@
         "path": "tests/test_auth_badge.py"
       },
       {
-        "commits": 12,
-        "lines": 1998,
+        "commits": 13,
+        "lines": 2002,
         "path": "tests/test_auth_middleware.py"
       },
       {
-        "commits": 2,
-        "lines": 1156,
+        "commits": 3,
+        "lines": 1172,
         "path": "tests/test_auth_middleware_fuzz.py"
       },
       {
@@ -3885,8 +3890,8 @@
         "path": "tests/test_request_logging_middleware.py"
       },
       {
-        "commits": 6,
-        "lines": 1418,
+        "commits": 7,
+        "lines": 1426,
         "path": "tests/test_runs_command.py"
       },
       {
@@ -3900,8 +3905,8 @@
         "path": "tests/test_security.py"
       },
       {
-        "commits": 9,
-        "lines": 480,
+        "commits": 10,
+        "lines": 489,
         "path": "tests/test_security_advanced.py"
       },
       {
@@ -3995,13 +4000,18 @@
         "path": "tests/test_ui_auth_hardening.py"
       },
       {
+        "commits": 1,
+        "lines": 126,
+        "path": "tests/test_ui_auth_transport.py"
+      },
+      {
         "commits": 2,
         "lines": 32,
         "path": "tests/test_ui_components.py"
       },
       {
-        "commits": 2,
-        "lines": 607,
+        "commits": 3,
+        "lines": 756,
         "path": "tests/test_ui_cov_auth.py"
       },
       {
@@ -4010,8 +4020,8 @@
         "path": "tests/test_ui_cov_logging.py"
       },
       {
-        "commits": 2,
-        "lines": 515,
+        "commits": 3,
+        "lines": 630,
         "path": "tests/test_ui_cov_middleware.py"
       },
       {
@@ -4020,8 +4030,8 @@
         "path": "tests/test_ui_cov_pages.py"
       },
       {
-        "commits": 1,
-        "lines": 1348,
+        "commits": 2,
+        "lines": 1360,
         "path": "tests/test_ui_cov_security.py"
       },
       {
@@ -4035,18 +4045,18 @@
         "path": "tests/test_ui_cov_state_bugs.py"
       },
       {
-        "commits": 6,
-        "lines": 1109,
+        "commits": 7,
+        "lines": 1219,
         "path": "tests/test_ui_cov_state_forms.py"
       },
       {
-        "commits": 4,
-        "lines": 1202,
+        "commits": 6,
+        "lines": 1296,
         "path": "tests/test_ui_cov_state_runs.py"
       },
       {
-        "commits": 1,
-        "lines": 422,
+        "commits": 2,
+        "lines": 428,
         "path": "tests/test_ui_dataset_page.py"
       },
       {
@@ -4075,8 +4085,8 @@
         "path": "tests/test_ui_gradio_legacy_components.py"
       },
       {
-        "commits": 1,
-        "lines": 167,
+        "commits": 2,
+        "lines": 182,
         "path": "tests/test_ui_hub_token_memory_only.py"
       },
       {
@@ -4130,8 +4140,13 @@
         "path": "tests/test_ui_runs_storage.py"
       },
       {
-        "commits": 20,
-        "lines": 1535,
+        "commits": 1,
+        "lines": 362,
+        "path": "tests/test_ui_sandbox_mediums.py"
+      },
+      {
+        "commits": 21,
+        "lines": 1564,
         "path": "tests/test_ui_security.py"
       },
       {
@@ -4145,8 +4160,8 @@
         "path": "tests/test_ui_small_things.py"
       },
       {
-        "commits": 22,
-        "lines": 6958,
+        "commits": 24,
+        "lines": 7096,
         "path": "tests/test_ui_states.py"
       },
       {
@@ -4250,9 +4265,9 @@
     "level": "full",
     "reason": "at least 30 qualifying commits, and at least 20 source files reach 10 revisions"
   },
-  "generatedAt": "2026-10-02T21:24:04.209Z",
+  "generatedAt": "2026-10-02T22:44:08.334Z",
   "generatedFrom": {
-    "commit": "5fbeab504ae2837d0b8689b63211598b8287d042"
+    "commit": "d999f0fc0c64d8fddbdf5ea1646434e16241ced9"
   },
   "pairs": [
     {
@@ -4469,16 +4484,16 @@
     "floor": "strong",
     "floorHeld": false,
     "floorTrigger": null,
-    "headDate": "2026-10-02T17:23:39-04:00",
-    "inScopeFiles": 779,
+    "headDate": "2026-10-02T18:43:35-04:00",
+    "inScopeFiles": 782,
     "pinnedStart": null,
     "priorFloor": "strong",
-    "qualifyingCommits": 227,
+    "qualifyingCommits": 230,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 10,
-    "since": "2026-04-05T21:23:39.000Z",
+    "since": "2026-04-05T22:43:35.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",

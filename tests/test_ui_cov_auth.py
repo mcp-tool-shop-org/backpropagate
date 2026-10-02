@@ -23,7 +23,7 @@ from backpropagate.ui_app import auth
 
 _AUTH_ENV = (
     "BACKPROPAGATE_UI_AUTH", "BACKPROPAGATE_UI_SHARE_HOST", "BACKPROPAGATE_UI_HOST_BIND",
-    "BACKPROPAGATE_UI_LAUNCH_TOKEN",
+    "BACKPROPAGATE_UI_LAUNCH_TOKEN", "BACKPROPAGATE_UI_PORT",
 )
 
 
@@ -223,13 +223,17 @@ class TestAllowlists:
 
     def test_origin_allowlist_defaults(self):
         assert auth._origin_allowlist({}) == {
-            "http://localhost", "http://127.0.0.1", "https://localhost", "https://127.0.0.1",
+            "http://localhost:7862", "http://127.0.0.1:7862", "http://[::1]:7862",
+            "https://localhost:7862", "https://127.0.0.1:7862", "https://[::1]:7862",
         }
 
     def test_origin_allowlist_adds_share_and_lan_host_both_schemes(self):
         env = {"BACKPROPAGATE_UI_SHARE_HOST": "t.example", "BACKPROPAGATE_UI_HOST_BIND": "10.0.0.7"}
         allowed = auth._origin_allowlist(env)
-        assert {"http://t.example", "https://t.example", "http://10.0.0.7", "https://10.0.0.7"} <= allowed
+        assert {
+            "http://t.example:80", "https://t.example:443",
+            "http://10.0.0.7:7862", "https://10.0.0.7:7862",
+        } <= allowed
 
     @pytest.mark.parametrize("bind", ["0.0.0.0", "::", "localhost", "127.0.0.1", "::1"])
     def test_origin_allowlist_ignores_wildcard_and_loopback_bind(self, bind):
@@ -237,7 +241,22 @@ class TestAllowlists:
 
     def test_origin_allowlist_defaults_to_process_env(self, monkeypatch):
         monkeypatch.setenv("BACKPROPAGATE_UI_SHARE_HOST", "t.example")
-        assert "https://t.example" in auth._origin_allowlist()
+        assert "https://t.example:443" in auth._origin_allowlist()
+
+    def test_origin_allowlist_uses_the_listen_port(self):
+        allowed = auth._origin_allowlist({"BACKPROPAGATE_UI_PORT": "9000"})
+        assert "http://localhost:9000" in allowed
+        assert "https://127.0.0.1:9000" in allowed
+        assert "http://localhost:7862" not in allowed
+
+    def test_origin_host_brackets_ipv6_once(self):
+        assert auth._origin_host("[::1]") == "[::1]"
+        assert auth._origin_host("::1") == "[::1]"
+        assert auth._origin_host("LocalHost") == "localhost"
+
+    def test_origin_matching_rejects_an_unparseable_port(self):
+        allow = auth._origin_allowlist({})
+        assert auth._origin_matches_allowlist("http://localhost:99999", allow) is False
 
     @pytest.mark.parametrize(
         ("host", "ok"),
@@ -255,9 +274,11 @@ class TestAllowlists:
     @pytest.mark.parametrize(
         ("origin", "ok"),
         [
-            ("", True),  # fail-open on missing Origin (HTTP); WS gate rejects separately
-            ("http://localhost:3000", True), ("https://127.0.0.1", True),
-            ("http://LOCALHOST", True),
+            ("", True),  # matcher stays open; HTTP mutations and authed WS reject separately
+            ("http://localhost:7862", True), ("http://127.0.0.1:7862", True),
+            ("https://localhost:7862", True), ("http://[::1]:7862", True),
+            ("http://localhost:3000", False), ("https://127.0.0.1", False),
+            ("http://LOCALHOST", False), ("http://127.0.0.1:9999", False),
             ("null", False), ("http://evil.com", False), ("http://localhost.evil.com", False),
             ("ftp://localhost", False),  # scheme is NOT in allowlist
             ("localhost", False), ("//localhost", False), ("http://", False),
@@ -410,10 +431,10 @@ class TestHttpMiddleware:
             assert _status(sent) == 421
             assert _inner.calls == []
 
-    async def test_passthrough_paths_skip_host_and_auth_checks(self, monkeypatch):
+    async def test_foreign_host_on_ping_is_421(self, monkeypatch):
         monkeypatch.setenv("BACKPROPAGATE_UI_AUTH", "u:p")
         sent = await _drive(_http("/ping", host="evil.com"))
-        assert _status(sent) == 200 and _inner.calls == ["http"]
+        assert _status(sent) == 421 and _inner.calls == []
 
     @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
     async def test_state_changing_method_with_foreign_origin_is_403(self, method):
@@ -425,8 +446,13 @@ class TestHttpMiddleware:
         sent = await _drive(_http(extra=[(b"origin", b"http://evil.com")]))
         assert _status(sent) == 200
 
+    @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+    async def test_state_changing_method_without_origin_is_403(self, method):
+        sent = await _drive(_http(method=method))
+        assert _status(sent) == 403 and _inner.calls == []
+
     async def test_post_with_loopback_origin_is_allowed(self):
-        sent = await _drive(_http(method="POST", extra=[(b"origin", b"http://localhost:3000")]))
+        sent = await _drive(_http(method="POST", extra=[(b"origin", b"http://localhost:7862")]))
         assert _status(sent) == 200
 
     async def test_missing_credentials_get_401_challenge(self, monkeypatch):
@@ -471,6 +497,33 @@ class TestHttpMiddleware:
         assert _status(sent) == 200
         cookie = {k: v for k, v in sent[0]["headers"] if k == b"set-cookie"}[b"set-cookie"]
         assert cookie.endswith(b"Secure")
+
+    async def test_loopback_ping_needs_no_cookie(self, monkeypatch):
+        monkeypatch.setenv("BACKPROPAGATE_UI_AUTH", "u:p")
+        sent = await _drive(_http("/ping"))
+        assert _status(sent) == 200 and _inner.calls == ["http"]
+
+    @pytest.mark.parametrize("path", ["/favicon.ico", "/_next/static/a.js"])
+    async def test_foreign_host_on_static_paths_is_421(self, path):
+        sent = await _drive(_http(path, host="evil.com"))
+        assert _status(sent) == 421 and _inner.calls == []
+
+    async def test_share_host_refuses_next_without_a_cookie(self, monkeypatch):
+        monkeypatch.setenv("BACKPROPAGATE_UI_AUTH", "u:p")
+        monkeypatch.setenv("BACKPROPAGATE_UI_SHARE_HOST", "t.example")
+        sent = await _drive(_http("/_next/static/a.js", host="t.example"))
+        assert _status(sent) == 401 and _inner.calls == []
+
+    async def test_share_host_serves_next_with_a_cookie(self, monkeypatch):
+        monkeypatch.setenv("BACKPROPAGATE_UI_AUTH", "u:p")
+        monkeypatch.setenv("BACKPROPAGATE_UI_SHARE_HOST", "t.example")
+        secret = auth._derive_secret({"BACKPROPAGATE_UI_AUTH": "u:p"})
+        cookie = auth._sign_cookie("u", secret)
+        sent = await _drive(_http(
+            "/_next/static/a.js", host="t.example",
+            extra=[(b"cookie", f"backprop_sess={cookie}".encode())],
+        ))
+        assert _status(sent) == 200 and _inner.calls == ["http"]
 
     async def test_production_mode_still_rejects_the_unlisted_host(self, monkeypatch):
         monkeypatch.setenv("BACKPROPAGATE_UI_AUTH", "u:p")
@@ -523,13 +576,43 @@ class TestTokenAutoMode:
         sent = await _drive(_http(extra=[(b"authorization", _basic("a", "b").encode())]))
         assert _status(sent) == 401
 
+    async def test_second_get_with_a_cookie_strips_the_query(self):
+        first = await _drive(_http("/runs", query=f"token={self.TOKEN}".encode()))
+        cookie = dict(first[0]["headers"])[b"set-cookie"].split(b";", 1)[0]
+        second = await _drive(_http(
+            "/runs", query=b"token=not-the-issued-value",
+            extra=[(b"cookie", cookie)],
+        ))
+        assert _status(second) == 302 and _inner.calls == []
+        headers = {k.lower(): v for k, v in second[0]["headers"]}
+        assert headers[b"location"] == b"/runs"
+        assert b"?" not in headers[b"location"]
+        assert b"set-cookie" not in headers
+        assert headers[b"x-content-type-options"] == b"nosniff"
+        assert headers[b"x-frame-options"] == b"SAMEORIGIN"
+
+    def test_query_token_key_detection(self):
+        assert auth._query_has_token({"query_string": b"token=one"}) is True
+        assert auth._query_has_token({"query_string": "token="}) is True
+        assert auth._query_has_token({"query_string": b"page=1"}) is False
+        assert auth._query_has_token({"query_string": b""}) is False
+        assert auth._query_has_token({"query_string": None}) is False
+        assert auth._query_has_token({}) is False
+
+    def test_clean_redirect_carries_nosniff(self):
+        headers = {k.lower(): v for k, v in auth._clean_redirect_headers("/runs")}
+        assert headers[b"location"] == b"/runs"
+        assert b"?" not in headers[b"location"]
+        assert headers[b"x-content-type-options"] == b"nosniff"
+        assert headers[b"x-frame-options"] == b"SAMEORIGIN"
+
 
 # =============================================================================
 # Middleware: WebSocket branch (all rejections are PRE-accept)
 # =============================================================================
 
 
-def _ws(host="localhost:7860", origin="http://localhost:3000", cookie=None, path="/_event"):
+def _ws(host="localhost:7860", origin="http://localhost:7862", cookie=None, path="/_event"):
     headers = []
     if host is not None:
         headers.append((b"host", host.encode()))
@@ -595,6 +678,50 @@ class TestWebSocketMiddleware:
     async def test_token_mode_ws_needs_the_cookie_not_the_token(self, monkeypatch):
         monkeypatch.setenv("BACKPROPAGATE_UI_LAUNCH_TOKEN", "tok")
         self._assert_pre_accept_close(await _drive(_ws()), 4401)
+
+    async def test_second_loopback_port_is_refused_with_a_valid_cookie(self, monkeypatch):
+        monkeypatch.setenv("BACKPROPAGATE_UI_AUTH", "u:p")
+        secret = auth._derive_secret({"BACKPROPAGATE_UI_AUTH": "u:p"})
+        cookie = f"backprop_sess={auth._sign_cookie('u', secret)}"
+        sent = await _drive(_ws(origin="http://127.0.0.1:9", cookie=cookie))
+        self._assert_pre_accept_close(sent, 4403)
+        assert sent[0]["reason"] == "origin_not_allowed"
+        posted = await _drive(_http(
+            method="POST",
+            extra=[
+                (b"origin", b"http://127.0.0.1:9"),
+                (b"cookie", cookie.encode()),
+            ],
+        ))
+        assert _status(posted) == 403 and _inner.calls == []
+
+    async def test_token_mode_accepts_the_ui_origin(self, monkeypatch):
+        monkeypatch.setenv("BACKPROPAGATE_UI_LAUNCH_TOKEN", "tok")
+        secret = auth._derive_secret({"BACKPROPAGATE_UI_LAUNCH_TOKEN": "tok"})
+        cookie = f"backprop_sess={auth._sign_cookie('default-user', secret)}"
+        await _drive(_ws(origin="http://127.0.0.1:7862", cookie=cookie))
+        assert _inner.calls == ["websocket"]
+
+    async def test_share_origin_uses_the_scheme_default_port(self, monkeypatch):
+        monkeypatch.setenv("BACKPROPAGATE_UI_AUTH", "u:p")
+        monkeypatch.setenv("BACKPROPAGATE_UI_SHARE_HOST", "t.example")
+        secret = auth._derive_secret({"BACKPROPAGATE_UI_AUTH": "u:p"})
+        cookie = f"backprop_sess={auth._sign_cookie('u', secret)}"
+        await _drive(_ws(host="t.example", origin="https://t.example", cookie=cookie))
+        assert _inner.calls == ["websocket"]
+        _inner.calls.clear()
+        refused = await _drive(_ws(
+            host="t.example", origin="https://t.example:8443", cookie=cookie,
+        ))
+        self._assert_pre_accept_close(refused, 4403)
+        posted = await _drive(_http(
+            method="POST", host="t.example",
+            extra=[
+                (b"origin", b"https://t.example"),
+                (b"cookie", cookie.encode()),
+            ],
+        ))
+        assert _status(posted) == 200
 
 
 def test_close_codes_are_distinct_application_codes():

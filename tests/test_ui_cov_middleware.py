@@ -46,6 +46,7 @@ def _reset_state(monkeypatch):
     rl._reset_for_tests()
     for var in ("BACKPROPAGATE_UI_RATE_LIMIT_HTTP_PER_MIN",
                 "BACKPROPAGATE_UI_RATE_LIMIT_WS_PER_MIN",
+                "BACKPROPAGATE_UI_RATE_LIMIT_UPLOAD_PER_MIN",
                 "BACKPROPAGATE_UI_REQUEST_LOG"):
         monkeypatch.delenv(var, raising=False)
     yield
@@ -66,8 +67,11 @@ async def _call(mw, scope, messages=None):
     return sent
 
 
-def _http(path="/", method="GET", client=("10.0.0.1", 5555)):
-    return {"type": "http", "path": path, "method": method, "client": client}
+def _http(path="/", method="GET", client=("10.0.0.1", 5555), host="localhost"):
+    scope = {"type": "http", "path": path, "method": method, "client": client}
+    if host is not None:
+        scope["headers"] = [(b"host", host.encode())]
+    return scope
 
 
 # =============================================================================
@@ -76,21 +80,19 @@ def _http(path="/", method="GET", client=("10.0.0.1", 5555)):
 
 
 class TestHealthz:
-    async def test_get_returns_json_with_status_mode_and_version(self, monkeypatch):
+    async def test_get_returns_status_only(self, monkeypatch):
         monkeypatch.delenv("BACKPROPAGATE_UI_AUTH", raising=False)
         mw = healthz_mod.healthz_middleware(_recording_app)
         sent = await _call(mw, _http("/healthz"))
         start, body = sent
         assert start["status"] == 200
-        headers = dict(start["headers"])
+        headers = {k.lower(): v for k, v in start["headers"]}
         assert headers[b"content-type"].startswith(b"application/json")
         assert headers[b"cache-control"] == b"no-store"
+        assert headers[b"x-content-type-options"] == b"nosniff"
+        assert headers[b"x-frame-options"] == b"SAMEORIGIN"
         assert int(headers[b"content-length"]) == len(body["body"])
-        payload = json.loads(body["body"])
-        assert payload["status"] == "ok"
-        assert payload["auth_mode"] == "no_auth_local_only"
-        from backpropagate import __version__
-        assert payload["version"] == str(__version__)
+        assert json.loads(body["body"]) == {"status": "ok"}
         assert _recording_app.calls == []  # never reached the inner app
 
     async def test_probe_is_unauthenticated_and_reports_configured_mode(self, monkeypatch):
@@ -113,13 +115,16 @@ class TestHealthz:
         mw = healthz_mod.healthz_middleware(_recording_app)
         sent = await _call(mw, _http("/healthz", method=method))
         assert sent[0]["status"] == 405
-        assert dict(sent[0]["headers"])[b"allow"] == b"GET, HEAD"
+        headers = {k.lower(): v for k, v in sent[0]["headers"]}
+        assert headers[b"allow"] == b"GET, HEAD"
+        assert headers[b"x-content-type-options"] == b"nosniff"
+        assert headers[b"x-frame-options"] == b"SAMEORIGIN"
         assert sent[1]["body"] == b""
         assert _recording_app.calls == []
 
     async def test_missing_method_defaults_to_get(self):
         mw = healthz_mod.healthz_middleware(_recording_app)
-        scope = {"type": "http", "path": "/healthz"}
+        scope = {"type": "http", "path": "/healthz", "headers": [(b"host", b"localhost")]}
         sent = await _call(mw, scope)
         assert sent[0]["status"] == 200
 
@@ -135,20 +140,24 @@ class TestHealthz:
         await _call(mw, {"type": "websocket", "path": "/healthz"})
         assert _recording_app.calls == ["websocket"]
 
-    async def test_probe_never_fails_when_mode_detection_and_version_explode(self, monkeypatch):
-        """Mocked: ``ui_app.auth._detect_mode`` raises, ``backpropagate.__version__`` is
-        made un-importable via a property-less module replacement."""
-        import backpropagate
+    async def test_foreign_host_is_421(self):
+        mw = healthz_mod.healthz_middleware(_recording_app)
+        sent = await _call(mw, _http("/healthz", host="evil.com"))
+        assert sent[0]["status"] == 421
+        assert _recording_app.calls == []
+
+    def test_header_builder_failure_still_stamps_nosniff(self, monkeypatch):
+        """Mocked: the shared header builder raises."""
         import backpropagate.ui_app.auth as auth_mod
 
-        def boom(_env):
-            raise RuntimeError("detect exploded")
+        def boom():
+            raise RuntimeError("no headers")
 
-        monkeypatch.setattr(auth_mod, "_detect_mode", boom)
-        monkeypatch.delattr(backpropagate, "__version__")
-        # ``from backpropagate import __version__`` now raises ImportError.
-        payload = json.loads(healthz_mod._health_payload())
-        assert payload == {"status": "ok", "auth_mode": "unknown", "version": "unknown"}
+        monkeypatch.setattr(auth_mod, "_hardened_header_pairs", boom)
+        headers = dict(healthz_mod._health_security_headers())
+        assert headers[b"x-content-type-options"] == b"nosniff"
+        assert headers[b"x-frame-options"] == b"SAMEORIGIN"
+        assert json.loads(healthz_mod._health_payload()) == {"status": "ok"}
 
 
 # =============================================================================
@@ -354,10 +363,25 @@ class TestRateLimitHelpers:
 
         assert rl._client_addr({"client": (Bad(), 1)}) == ""
 
+    def test_429_still_stamps_nosniff_when_the_builder_raises(self, monkeypatch):
+        """Mocked: the shared header builder raises."""
+        import backpropagate.ui_app.auth as auth_mod
+
+        def boom():
+            raise RuntimeError("no headers")
+
+        monkeypatch.setattr(auth_mod, "_hardened_header_pairs", boom)
+        _body, headers = rl._build_429_response()
+        listed = dict(headers)
+        assert listed[b"x-content-type-options"] == b"nosniff"
+        assert listed[b"x-frame-options"] == b"SAMEORIGIN"
+
     def test_429_response_shape(self):
         body, headers = rl._build_429_response()
-        h = dict(headers)
+        h = {k.lower(): v for k, v in headers}
         assert h[b"retry-after"] == b"60" and h[b"cache-control"] == b"no-store"
+        assert h[b"x-content-type-options"] == b"nosniff"
+        assert h[b"x-frame-options"] == b"SAMEORIGIN"
         assert int(h[b"content-length"]) == len(body)
         assert body.startswith(b"429 Too Many Requests")
 
@@ -411,6 +435,7 @@ class TestRateLimitMiddleware:
     async def test_both_caps_zero_disables_everything(self, monkeypatch):
         monkeypatch.setenv(rl._HTTP_ENV, "0")
         monkeypatch.setenv(rl._WS_ENV, "0")
+        monkeypatch.setenv(rl._UPLOAD_ENV, "0")
         mw = rl.rate_limit_middleware(_recording_app)
         for _ in range(300):
             sent = await _call(mw, _http())
@@ -489,6 +514,50 @@ class TestRateLimitMiddleware:
         for _ in range(3):
             await _call(mw, {"type": "custom", "path": "/", "client": ("9.9.9.9", 1)})
         assert _recording_app.calls == ["custom"] * 3
+
+    async def test_upload_posts_have_their_own_cap(self, monkeypatch):
+        monkeypatch.setenv(rl._UPLOAD_ENV, "2")
+        monkeypatch.setenv(rl._HTTP_ENV, "100")
+        mw = rl.rate_limit_middleware(_recording_app)
+        statuses = [
+            (await _call(mw, _http("/_upload", method="POST")))[0]["status"]
+            for _ in range(4)
+        ]
+        assert statuses == [200, 200, 429, 429]
+        assert (await _call(mw, _http("/runs")))[0]["status"] == 200
+        blocked = await _call(mw, _http("/_upload", method="POST"))
+        listed = {k.lower(): v for k, v in blocked[0]["headers"]}
+        assert listed[b"x-content-type-options"] == b"nosniff"
+
+    async def test_upload_cap_zero_does_not_limit_posts(self, monkeypatch):
+        monkeypatch.setenv(rl._UPLOAD_ENV, "0")
+        mw = rl.rate_limit_middleware(_recording_app)
+        for _ in range(5):
+            sent = await _call(mw, _http("/_upload", method="POST"))
+            assert sent[0]["status"] == 200
+
+    async def test_get_upload_is_not_on_the_upload_cap(self, monkeypatch):
+        monkeypatch.setenv(rl._UPLOAD_ENV, "1")
+        mw = rl.rate_limit_middleware(_recording_app)
+        for _ in range(3):
+            sent = await _call(mw, _http("/_upload"))
+            assert sent[0]["status"] == 200
+
+    async def test_accepted_event_frames_are_not_capped(self, monkeypatch):
+        monkeypatch.setenv(rl._WS_ENV, "1")
+
+        async def _accepting(scope, receive, send):
+            _recording_app.calls.append(scope.get("type"))
+            await send({"type": "websocket.accept"})
+            for _ in range(20):
+                await send({"type": "websocket.send", "text": "frame"})
+
+        mw = rl.rate_limit_middleware(_accepting)
+        scope = {"type": "websocket", "path": "/_event", "client": ("8.8.8.8", 1)}
+        first = await _call(mw, scope)
+        second = await _call(mw, scope)
+        assert first[0]["type"] == "websocket.accept"
+        assert second[0]["type"] == "websocket.accept"
 
     async def test_429_path_also_counts_toward_prune_interval(self, monkeypatch):
         monkeypatch.setenv(rl._HTTP_ENV, "1")

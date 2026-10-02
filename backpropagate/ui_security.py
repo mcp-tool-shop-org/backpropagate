@@ -2835,27 +2835,73 @@ class ContentSecurityPolicy:
 # - ``style_src=['self', 'unsafe-inline']`` — Reflex uses inline styles for
 #   the Radix theme + per-component CSS variables (the TOKENS_CSS
 #   ``<style>`` tag rx.el.style injects on every page).
-# - ``img_src=['self', 'data:', 'blob:', 'https:']`` — Reflex serves
-#   bundled SVG icons from /icons (self) and the chrome's auth-badge
-#   chip can carry inline SVG data URIs. ``blob:`` is needed for
-#   client-rendered chart exports / file-download affordances.
-# - ``connect_src=['self', 'ws:', 'wss:']`` — Reflex's /_event WS
-#   endpoint is on the same origin. ``ws:`` covers loopback; ``wss:``
-#   covers the documented cloudflared-tunnel / reverse-proxy deploy
-#   shapes. No external API origin is allowed — the UI never directly
-#   calls a model host from the browser (model downloads happen server-
-#   side in the trainer process; the UI only consumes WS frames).
+# - ``img_src=['self', 'data:', 'blob:']`` — Reflex serves bundled SVG
+#   icons from /icons (self) and the chrome can carry inline SVG data
+#   URIs. ``blob:`` is needed for client-rendered chart exports /
+#   file-download affordances. The UI does not load a remote image, so
+#   ``https:`` is not in the list.
+# - ``connect_src`` — ``'self'`` plus the UI's own loopback WebSocket
+#   origins on the listen port (``BACKPROPAGATE_UI_PORT``, else 7862).
+#   When ``BACKPROPAGATE_UI_SHARE_HOST`` is set, ``get_reflex_csp`` also
+#   adds that host's ``ws:`` and ``wss:`` origins at the scheme default
+#   port. Bare ``ws:`` / ``wss:`` are not used. The UI never calls a
+#   model host from the browser.
 # - ``font_src=['self', 'data:']`` — Reflex's stylesheet bundle inlines
 #   the Inter / JetBrains Mono webfonts (Wave 5.5 design-token doc), so
 #   no third-party font CDN allowance is needed.
 # - ``object-src='none'`` and ``frame-ancestors='self'`` — no plugin
 #   objects; no iframe-embedding outside same-origin.
+_DEFAULT_UI_PORT = 7862
+
+
+def _ui_listen_port(env: dict[str, str] | None = None) -> int:
+    """UI listen port from ``BACKPROPAGATE_UI_PORT``, else 7862.
+
+    A missing, non-integer, or out-of-range value uses the CLI default.
+    ``0`` is not a listen port.
+    """
+    if env is None:
+        env = dict(os.environ)
+    raw = env.get("BACKPROPAGATE_UI_PORT", "").strip()
+    if not raw:
+        return _DEFAULT_UI_PORT
+    try:
+        port = int(raw)
+    except ValueError:
+        return _DEFAULT_UI_PORT
+    if port < 1 or port > 65535:
+        return _DEFAULT_UI_PORT
+    return port
+
+
+def _reflex_connect_src(env: dict[str, str] | None = None) -> list[str]:
+    """``connect-src`` tokens for this process's UI origin.
+
+    Loopback WebSocket origins use the listen port. A share host, when
+    set, is added at the scheme default port (the browser omits it).
+    """
+    if env is None:
+        env = dict(os.environ)
+    port = _ui_listen_port(env)
+    sources = [
+        "'self'",
+        f"ws://127.0.0.1:{port}",
+        f"ws://localhost:{port}",
+        f"ws://[::1]:{port}",
+    ]
+    share = env.get("BACKPROPAGATE_UI_SHARE_HOST", "").strip().lower()
+    if share:
+        sources.append(f"wss://{share}")
+        sources.append(f"ws://{share}")
+    return sources
+
+
 DEFAULT_REFLEX_CSP = CSPConfig(
     script_src=["'self'", "'unsafe-eval'", "'unsafe-inline'"],
     style_src=["'self'", "'unsafe-inline'"],
-    img_src=["'self'", "data:", "blob:", "https:"],
+    img_src=["'self'", "data:", "blob:"],
     font_src=["'self'", "data:"],
-    connect_src=["'self'", "ws:", "wss:"],
+    connect_src=_reflex_connect_src({}),
     frame_ancestors=["'self'"],
     object_src=["'none'"],
 )
@@ -2865,7 +2911,8 @@ def get_reflex_csp(report_only: bool = False) -> ContentSecurityPolicy:
     """Get a CSP configured for the Reflex UI (FRONTEND-A-003, v1.4 Wave 2).
 
     Returns a ``ContentSecurityPolicy`` seeded from ``DEFAULT_REFLEX_CSP``.
-    See that constant's docstring for the per-directive rationale.
+    ``connect-src`` is rebuilt from the process environment so the listen
+    port and a share host are the origins the browser actually uses.
 
     Args:
         report_only: If True, only report violations (don't enforce). Use
@@ -2883,7 +2930,7 @@ def get_reflex_csp(report_only: bool = False) -> ContentSecurityPolicy:
         style_src=DEFAULT_REFLEX_CSP.style_src.copy(),
         img_src=DEFAULT_REFLEX_CSP.img_src.copy(),
         font_src=DEFAULT_REFLEX_CSP.font_src.copy(),
-        connect_src=DEFAULT_REFLEX_CSP.connect_src.copy(),
+        connect_src=_reflex_connect_src(),
         frame_ancestors=DEFAULT_REFLEX_CSP.frame_ancestors.copy(),
         object_src=DEFAULT_REFLEX_CSP.object_src.copy(),
         report_only=report_only,

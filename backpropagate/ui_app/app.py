@@ -44,12 +44,18 @@ except Exception as _exc:  # noqa: BLE001
 # the sequence in order (first entry is the innermost wrap, last entry is
 # the outermost / network-facing wrap). See ``middleware/__init__.py`` for
 # the chain-ordering rationale.
+from .access_log import install_access_query_filter
 from .middleware import (
     healthz_middleware,
     rate_limit_middleware,
     request_logging_middleware,
     security_headers_middleware,
 )
+
+# The Reflex server configures logging, then imports this module. The
+# filter survives a later dictConfig (handlers are replaced, filters are
+# not) and drops the query string from uvicorn and granian access lines.
+install_access_query_filter()
 from .pages.dataset import dataset_page
 from .pages.export import export_page
 from .pages.models import models_page

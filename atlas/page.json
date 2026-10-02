@@ -71,8 +71,8 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 1,
-      "changed": 5,
+      "added": 3,
+      "changed": 22,
       "moved": 0,
       "parts": 3,
       "removed": 0
@@ -80,13 +80,13 @@
     "items": [
       {
         "kind": "counts",
-        "sentence": "Nothing structural changed since 2026-10-02; 1 file added and 5 changed content.",
+        "sentence": "Nothing structural changed since 2026-10-02; 3 files added and 22 changed content.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "0c7f37c570771ff107d12f91a84bfb9dfc609d91",
-      "generatedAt": "2026-10-02T20:27:21.041Z"
+      "commit": "5fbeab504ae2837d0b8689b63211598b8287d042",
+      "generatedAt": "2026-10-02T21:24:04.209Z"
     },
     "unchanged": true
   },
@@ -95,9 +95,9 @@
     "Window: 180 days; a pair counts from 10 shared commits, since 35 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "5fbeab504ae2837d0b8689b63211598b8287d042",
+  "commit": "d999f0fc0c64d8fddbdf5ea1646434e16241ced9",
   "defaultBranch": "main",
-  "derived": "13 parts, mostly Python (269 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
+  "derived": "13 parts, mostly Python (272 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
   "doors": [
     {
       "checks": [
@@ -123,7 +123,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 67
+          "files": 68
         },
         {
           "boundary": "requirements",
@@ -143,7 +143,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 184
+          "files": 186
         },
         {
           "boundary": "fuzz",
@@ -194,7 +194,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 67
+          "files": 68
         },
         {
           "boundary": "requirements",
@@ -397,7 +397,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 27
+          "files": 28
         }
       ],
       "runs": [
@@ -471,7 +471,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 27
+          "files": 28
         }
       ],
       "runs": [
@@ -523,7 +523,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 27
+          "files": 28
         }
       ],
       "runs": [
@@ -560,11 +560,11 @@
       ]
     }
   ],
-  "generatedAt": "2026-10-02T21:24:04.209Z",
+  "generatedAt": "2026-10-02T22:44:08.334Z",
   "limits": [
     "56 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
     "16 imports could not be resolved: `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; `tests/test_full_ft_offload_smoke.py` imports a path built at run time; and 13 more.",
-    "13 writes and 19 reads use paths built at run time and are not named here.",
+    "12 writes and 19 reads use paths built at run time and are not named here.",
     "51 writes and 106 reads go to a path their caller passes, not to this repository.",
     "5 writes and 4 reads go to the home directory (.backpropagate/, .cache/ and AppData/), not to this repository.",
     "4 writes go to a temporary directory, not to this repository.",
@@ -619,13 +619,13 @@
   ],
   "summary": null,
   "summaryFrom": null,
-  "testFiles": 187,
+  "testFiles": 189,
   "testedBy": {
-    "backpropagate": 174,
+    "backpropagate": 176,
     "bin": 0,
     "scripts": 3
   },
-  "unnamedWrites": 13,
+  "unnamedWrites": 12,
   "unread": [],
   "unreadFiles": 0,
   "unreadNote": [],

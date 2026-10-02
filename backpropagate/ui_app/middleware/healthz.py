@@ -1,22 +1,23 @@
 """``/healthz`` ASGI middleware — FRONTEND-5 (Wave 6b).
 
 Lightweight orchestrator probe endpoint. Returns JSON
-``{"status": "ok", "auth_mode": "...", "version": "..."}`` on GET ``/healthz``.
+``{"status": "ok"}`` on GET ``/healthz``.
 
 Why a middleware and not a Reflex page: Reflex pages render React components
 and are reached through the Next.js SPA shell. An orchestrator (Kubernetes
-liveness probe, AWS ELB health check, cloudflared ``--tunnel-token`` health
-check) wants a plain HTTP route with a JSON body and no HTML overhead.
-Wrapping the ASGI app with an early-exit on the ``/healthz`` path is the
-cleanest way to add that route without coupling to Reflex's page-tree
-internals.
+liveness probe, AWS ELB health check, cloudflared tunnel health check)
+wants a plain HTTP route with a JSON body and no HTML overhead. Wrapping
+the ASGI app with an early-exit on the ``/healthz`` path is the cleanest
+way to add that route without coupling to Reflex's page-tree internals.
 
 Wired in the ASGI chain as the OUTERMOST wrap (even outside rate-limit) so
-the probe is unaffected by per-IP caps and doesn't bother going through the
-auth gate. The probe is intentionally unauthenticated — orchestrators that
-need to know "is the process alive" should not have to carry credentials,
-and the response carries no operator-sensitive data (auth_mode is the
-configured posture, not a session token; version is public).
+the probe is unaffected by per-IP caps and doesn't go through the auth
+gate. The probe is intentionally unauthenticated — orchestrators that need
+to know "is the process alive" should not have to carry credentials. The
+body is exactly one key. A foreign Host is refused with 421 before that
+body is built. Because this wrap sits outside the security-headers
+middleware, the response stamps ``X-Content-Type-Options`` and
+``X-Frame-Options`` itself.
 
 Pre-existing ``/ping`` Reflex route remains the framework-internal health
 check (it's hardcoded into Reflex's SPA). ``/healthz`` is the orchestrator-
@@ -25,66 +26,72 @@ facing canonical name (matches the Kubernetes / Knative convention).
 
 from __future__ import annotations
 
-import json
-import os
+import logging
 from collections.abc import Callable
+
+logger = logging.getLogger(__name__)
+
+_HEALTH_BODY = b'{"status": "ok"}'
 
 
 def _health_payload() -> bytes:
-    """Build the JSON body for the /healthz response.
+    """JSON body for ``/healthz``: exactly ``{"status": "ok"}``."""
+    return _HEALTH_BODY
 
-    Fields:
-    - ``status``    — always ``"ok"`` when the process is reachable enough
-                      to execute this middleware. A more detailed status
-                      (e.g. "draining", "degraded") would require the
-                      orchestrator to wire in per-component health, which
-                      v1.3 deliberately defers.
-    - ``auth_mode`` — resolved auth mode from ``ui_app.auth._detect_mode``.
-                      No credentials are returned; this is just the posture
-                      (``no_auth_local_only``, ``token_auto``, ...) so the
-                      orchestrator can verify the process is configured the
-                      way it expects.
-    - ``version``   — the backpropagate package version from
-                      ``backpropagate.__version__``. Useful for rolling-
-                      deploy probes that need to confirm the new image is
-                      actually serving traffic.
+
+def _health_security_headers() -> list[tuple[bytes, bytes]]:
+    """nosniff and frame headers for a response this middleware sends itself.
+
+    Prefer the shared hardened set. If that builder fails, still stamp the
+    two headers a probe response has to carry.
     """
+    pairs: list[tuple[bytes, bytes]] = []
     try:
-        from ..auth import _detect_mode
-        mode = _detect_mode(dict(os.environ))
-        auth_mode = str(mode.value)
-    except Exception:  # noqa: BLE001 — never fail the probe
-        auth_mode = "unknown"
+        from ..auth import _hardened_header_pairs
 
-    try:
-        from backpropagate import __version__
-        version = str(__version__)
-    except Exception:  # noqa: BLE001
-        version = "unknown"
-
-    payload = {
-        "status": "ok",
-        "auth_mode": auth_mode,
-        "version": version,
-    }
-    return json.dumps(payload).encode("utf-8")
+        pairs = list(_hardened_header_pairs())
+    except Exception as exc:  # noqa: BLE001 — a probe must still answer
+        logger.debug("healthz: security headers unavailable: %s", type(exc).__name__)
+    present = {name.lower() for name, _ in pairs}
+    if b"x-content-type-options" not in present:
+        pairs.append((b"x-content-type-options", b"nosniff"))
+    if b"x-frame-options" not in present:
+        pairs.append((b"x-frame-options", b"SAMEORIGIN"))
+    return pairs
 
 
 def healthz_middleware(asgi_app: Callable) -> Callable:
     """ASGI middleware factory — early-exit handler for ``/healthz``.
 
-    On GET ``/healthz`` (any host, any auth), returns 200 with JSON. Every
-    other path passes through unchanged. Method != GET returns 405 with an
-    empty body.
+    On GET ``/healthz`` with an allowed Host, returns 200 with JSON. A
+    foreign Host returns 421. Every other path passes through unchanged.
+    Method != GET/HEAD returns 405 with an empty body.
 
-    Wired as the OUTERMOST wrap so the probe is unaffected by rate-limit,
-    auth, or request-logging. The probe response time is dominated by the
-    JSON dump + env-var read (~10μs).
+    Wired as the OUTERMOST wrap so the probe is unaffected by rate-limit
+    or the credential check. The Host allowlist still applies.
     """
 
     async def middleware(scope: dict, receive: Callable, send: Callable) -> None:
         if scope.get("type") != "http" or scope.get("path") != "/healthz":
             await asgi_app(scope, receive, send)
+            return
+
+        from ..auth import (
+            _build_421_response,
+            _header_value,
+            _host_allowlist,
+            _host_matches_allowlist,
+        )
+
+        host_header = _header_value(scope.get("headers") or [], b"host")
+        if not _host_matches_allowlist(host_header, _host_allowlist()):
+            body, headers = _build_421_response(host_header)
+            await send({
+                "type": "http.response.start",
+                "status": 421,
+                "headers": headers,
+            })
+            await send({"type": "http.response.body", "body": body})
             return
 
         method = (scope.get("method") or "GET").upper()
@@ -96,6 +103,7 @@ def healthz_middleware(asgi_app: Callable) -> Callable:
                     (b"content-type", b"text/plain; charset=utf-8"),
                     (b"allow", b"GET, HEAD"),
                     (b"content-length", b"0"),
+                    *_health_security_headers(),
                 ],
             })
             await send({"type": "http.response.body", "body": b""})
@@ -106,6 +114,7 @@ def healthz_middleware(asgi_app: Callable) -> Callable:
             (b"content-type", b"application/json; charset=utf-8"),
             (b"content-length", str(len(body)).encode("ascii")),
             (b"cache-control", b"no-store"),
+            *_health_security_headers(),
         ]
         await send({
             "type": "http.response.start",

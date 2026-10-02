@@ -65,7 +65,7 @@ def _start_stop_button() -> rx.Component:
             size="3",
             on_click=TrainState.stop_training,
             disabled=TrainState.stop_requested,
-            style={"border_radius": "var(--bp-r-pill)", "min_width": "220px"},
+            style={"border_radius": "var(--bp-r-pill)", "min_width": "200px"},
             aria_label="Stop and save checkpoint",
         ),
         rx.button(
@@ -74,7 +74,7 @@ def _start_stop_button() -> rx.Component:
             color_scheme="teal",
             size="3",
             disabled=TrainState.form_disabled,
-            style={"border_radius": "var(--bp-r-pill)", "min_width": "220px"},
+            style={"border_radius": "var(--bp-r-pill)", "min_width": "200px"},
             on_click=TrainState.start_training,
             aria_label="Start training",
         ),
@@ -84,13 +84,10 @@ def _start_stop_button() -> rx.Component:
 def _action_bar() -> rx.Component:
     """The estimate next to the primary action: you see whether it fits
     right where you press Start."""
-    return rx.grid(
-        vram_estimate_card(),
-        rx.flex(_start_stop_button(), align="center", justify="end", height="100%"),
-        columns=rx.breakpoints(initial="1", md="1fr auto"),
-        gap="var(--space-5)",
+    return rx.box(
+        vram_estimate_card(action=_start_stop_button()),
+        class_name="bp-action-bar",
         width="100%",
-        align="center",
     )
 
 

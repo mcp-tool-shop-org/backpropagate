@@ -329,6 +329,17 @@ code, pre, .mono {
   color: var(--bp-muted);
 }
 
+/* The primary action stays in view (ui-v2 P3): the estimate and Start
+   button dock at the bottom of the scrolling column; the form scrolls
+   underneath a short fade. */
+.bp-action-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  padding: 20px 0 12px;
+  background: linear-gradient(to bottom, transparent, var(--bp-bg) 20px);
+}
+
 /* Choice cards (ui-v2 P3): a radio option as a selectable card. The whole
    card is the label, so clicking anywhere picks it; the checked card takes
    the teal edge, the focused radio's card shows the focus ring. */

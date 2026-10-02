@@ -183,6 +183,8 @@ def multi_run_page() -> rx.Component:
             gap="var(--space-3)",
             align="center",
             justify="end",
+            class_name="bp-action-bar",
+            width="100%",
         ),
         active="multi-run",
         title="Multi-run",

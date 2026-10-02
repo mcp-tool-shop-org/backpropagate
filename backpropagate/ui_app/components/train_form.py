@@ -470,9 +470,11 @@ _VERDICT_COLOR = {
 }
 
 
-def vram_estimate_card() -> rx.Component:
+def vram_estimate_card(action: rx.Component | None = None) -> rx.Component:
     """"Fits / Tight / Won't fit" with the estimate on a bar against the card.
 
+    One compact docked row: the number, the bar, the verdict and (when given)
+    the page's primary ``action`` button, with one line of detail under it.
     The numbers are ``backprop estimate-vram``'s (ui_jobs.vram_verdict).
     """
     S = TrainState
@@ -483,39 +485,25 @@ def vram_estimate_card() -> rx.Component:
         ("wont_fit", _VERDICT_COLOR["wont_fit"]),
         _VERDICT_COLOR["unknown"],
     )
-    return rx.box(
+    row = [
         rx.flex(
-            rx.flex(
-                rx.text(
-                    "Estimated VRAM",
-                    style={"color": "var(--bp-text-2)", "font_size": "13px"},
-                ),
-                rx.text(
-                    S.vram_est_label,
-                    id="bp-vram-estimate",
-                    class_name="bp-num",
-                    style={"color": "var(--bp-text)", "font_size": "15px", "font_weight": "600"},
-                ),
-                direction="column",
-                gap="2px",
+            rx.text(
+                "Estimated VRAM",
+                style={"color": "var(--bp-text-2)", "font_size": "12px"},
             ),
-            rx.spacer(),
-            rx.box(
-                S.vram_est_title,
-                aria_label=S.vram_est_title,
+            rx.text(
+                S.vram_est_label,
+                id="bp-vram-estimate",
+                class_name="bp-num",
                 style={
-                    "color": color,
-                    "border": "1px solid currentColor",
-                    "border_radius": "var(--bp-r-pill)",
-                    "padding": "4px 12px",
-                    "font_size": "13px",
+                    "color": "var(--bp-text)",
+                    "font_size": "15px",
                     "font_weight": "600",
+                    "white_space": "nowrap",
                 },
-                id="bp-vram-verdict",
             ),
-            align="center",
-            width="100%",
-            gap="var(--space-4)",
+            direction="column",
+            gap="2px",
         ),
         rx.box(
             rx.box(
@@ -529,21 +517,50 @@ def vram_estimate_card() -> rx.Component:
             ),
             style={
                 "height": "8px",
+                "flex": "1 1 140px",
+                "min_width": "100px",
                 "background": "var(--bp-field-bg)",
                 "border_radius": "var(--bp-r-pill)",
                 "overflow": "hidden",
-                "margin": "12px 0 10px",
             },
             role="presentation",
         ),
-        _muted(S.vram_est_detail),
-        padding="var(--space-5)",
+        rx.box(
+            S.vram_est_title,
+            aria_label=S.vram_est_title,
+            style={
+                "color": color,
+                "border": "1px solid currentColor",
+                "border_radius": "var(--bp-r-pill)",
+                "padding": "4px 12px",
+                "font_size": "13px",
+                "font_weight": "600",
+                "white_space": "nowrap",
+            },
+            id="bp-vram-verdict",
+        ),
+    ]
+    if action is not None:
+        row.append(action)
+    return rx.box(
+        rx.flex(*row, align="center", gap="var(--space-4)", wrap="wrap", width="100%"),
+        rx.text(
+            S.vram_est_detail,
+            size="1",
+            style={
+                "color": "var(--bp-muted)",
+                "font_size": "12px",
+                "line_height": "1.45",
+                "margin_top": "8px",
+            },
+        ),
+        padding="14px 20px",
         width="100%",
         style={
             "background": "var(--bp-surface)",
-            "border": "1px solid var(--bp-border)",
+            "border": "1px solid var(--bp-border-2)",
             "border_radius": "var(--bp-r-lg)",
-            "box_shadow": "var(--bp-shadow-card)",
+            "box_shadow": "var(--bp-shadow-pop)",
         },
     )
 

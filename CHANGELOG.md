@@ -289,6 +289,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-user working folder cannot be created and the package is read-only
   (the Store layout): it stops with `RUNTIME_UI_WORKDIR_UNAVAILABLE` naming
   the folder and `BACKPROPAGATE_UI_WORKDIR`.
+- **Web UI origin, Host and launch-token handling tightened.** The Origin
+  check compares scheme, host and port (cookies are not scoped to a port, so
+  a page on another loopback port could open the UI's WebSocket), and a
+  state-changing request with no Origin is refused. `/healthz`, `/ping`,
+  `/_next/` and the favicon now go through the Host allowlist; `/healthz`
+  returns only `{"status": "ok"}`; with a share host the frontend's assets
+  need the session cookie. A visit with `?token=` in the address is
+  redirected to a clean URL even when the session cookie is already set,
+  and the server's access log records the path without the query. The CSP's
+  `img-src` drops `https:` and `connect-src` names the UI's own origin; the
+  token redirect, 429 and `/healthz` responses carry the hardening headers.
+  Upload posts get their own per-minute cap
+  (`BACKPROPAGATE_UI_RATE_LIMIT_UPLOAD_PER_MIN`, default 30).
 - **Web UI sandbox and uploads hardened.** The UI output folder is refused
   when a symlink or a Windows junction stands in for it or for any folder
   below the home folder, checked before the path is resolved and before

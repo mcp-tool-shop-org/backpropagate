@@ -657,6 +657,22 @@ def get_gpu_info() -> dict[str, Any]:
     return {"available": False}
 
 
+def _cuda_runtime_version() -> str | None:
+    """The CUDA version torch was built with, when a CUDA device is usable; else None.
+
+    ``backprop info`` printed "CUDA: not available" on every machine before
+    1.8.2 because nothing filled this field.
+    """
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return torch.version.cuda
+    except Exception:  # nosec B110 - torch missing or a broken CUDA stack reads as "not available"
+        pass
+    return None
+
+
 def get_system_info() -> dict[str, Any]:
     """
     Get system information for debugging.
@@ -673,6 +689,7 @@ def get_system_info() -> dict[str, Any]:
         "processor": platform.processor(),
         "features": dict(FEATURES.items()),
         "gpu": get_gpu_info(),
+        "cuda_version": _cuda_runtime_version(),
     }
 
     # Add memory info if psutil available.

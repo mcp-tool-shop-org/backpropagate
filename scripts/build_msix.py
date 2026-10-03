@@ -67,6 +67,7 @@ TORCH_WHEEL_URL = (
 )
 TORCH_WHEEL_SHA256 = "52c5da6a0898d5d3473c02bd304b7a3bc0b72e351c6f3bfa0783e45ef9f4cd61"
 MIN_NVIDIA_DRIVER = 580  # CUDA 13.x runtime requirement; older drivers fall back to CPU silently
+_USER_AGENT = "backpropagate-build-msix (+https://github.com/mcp-tool-shop-org/backpropagate)"
 
 LLAMACPP_TAG = "b11323"
 LLAMACPP_COMMIT = "f11d642a27b921cf22b6a8beb1b899f960fedcde"
@@ -441,7 +442,10 @@ def _fetch(url: str, dest: Path, sha256: str, *, label: str) -> Path:
         dest.unlink()
     _log(f"{label}: fetching {url}")
     tmp = dest.with_suffix(dest.suffix + ".part")
-    with urllib.request.urlopen(url, timeout=600) as resp:  # noqa: S310 — pinned https URL + hash-checked below  # nosec B310
+    # download.pytorch.org (Cloudflare) answers 403 to urllib's default
+    # User-Agent and serves any other agent string. Seen 2026-10-03.
+    request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    with urllib.request.urlopen(request, timeout=600) as resp:  # noqa: S310 — pinned https URL + hash-checked below  # nosec B310
         with tmp.open("wb") as handle:
             shutil.copyfileobj(resp, handle, 16 * 1024 * 1024)
     actual = _sha256_file(tmp)

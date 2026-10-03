@@ -259,6 +259,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GGUF levels (it offered `q3_K_M` and `q6_K`, which the CLI rejects) and
   multi-run the CLI's merge modes. Literal `[KEY]` and `<redacted-path>`
   text is gone.
+- **`backprop info` shows the CUDA version.** It printed "CUDA: not available"
+  on every machine, GPU or not, because nothing filled the field; it now
+  reports the CUDA version torch runs on when a device is usable.
+- **The Store build downloads torch again.** `download.pytorch.org` refuses
+  urllib's default User-Agent (HTTP 403); `scripts/build_msix.py` now sends
+  its own on every fetch.
 - **Setting `BACKPROPAGATE_UI__OUTPUT_DIR` no longer crashes every
   command** (#277): the UI settings had no `output_dir` field, so loading
   the settings failed validation (`Extra inputs are not permitted`).

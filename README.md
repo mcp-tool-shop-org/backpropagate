@@ -71,13 +71,13 @@ If you tried one of the libraries above and bounced off the config-file ceremony
 
 ## What you can fine-tune on one GPU
 
-Backpropagate sizes the run to your card. These are **measured** numbers from 2026-09-30 on a 32 GB RTX 5090 (receipts: [`docs/receipts/2026-09-30-offload/`](docs/receipts/2026-09-30-offload/)). QLoRA peaks are at the preset's full context window with batch 1, which is the worst case for that preset; shorter examples use less.
+Backpropagate sizes the run to your card. These are **measured** numbers on a 32 GB RTX 5090: the QLoRA rows from 2026-10-03 (receipts: [`docs/receipts/2026-10-03-presets/`](docs/receipts/2026-10-03-presets/)), the full fine-tuning rows from 2026-09-30 (receipts: [`docs/receipts/2026-09-30-offload/`](docs/receipts/2026-09-30-offload/)). QLoRA peaks are at the preset's full context window with batch 1, which is the worst case for that preset; shorter examples use less.
 
 | Model | Method | Measured on a 32 GB card |
 |---|---|---|
-| **14B** (Qwen2.5-14B) | QLoRA | **25.0 GiB** peak at 4096 context (28.1 GiB reserved). |
-| 24B (Mistral-Small-24B) | QLoRA | 26.5 GiB peak at 4096 context (29.6 GiB reserved). |
-| **32B** (Qwen2.5-32B) | QLoRA | **Just fits:** 28.8 GiB peak at 2048 context (30.7 GiB reserved, about 0.65 GiB to spare). |
+| **14B** (Qwen2.5-14B) | QLoRA | **18.7 GiB** peak at 4096 context (20.0 GiB reserved). |
+| 24B (Mistral-Small-24B) | QLoRA | 22.8 GiB peak at 4096 context (24.2 GiB reserved). |
+| **32B** (Qwen2.5-32B) | QLoRA | **Fits:** 26.0 GiB peak at 2048 context (27.2 GiB reserved, about 4 GiB to spare). |
 | 3B | `mode="full"` (true full fine-tuning, on the GPU) | **22.0 GiB** peak (system-wide), 0.30 s/step at batch 4, 512 context. 7.5 GiB of that is paged optimizer state, which can spill to host RAM on a smaller card (untested). |
 | **7B-class** (Qwen2.5-7B, 7.6B params) | `mode="full" --full-ft-offload` | **Trains:** 5.3 GiB VRAM, **30.8 GiB host RAM** (32.2 GiB while saving), **14.7 s/step**. Linux or WSL2 only. |
 
@@ -415,9 +415,9 @@ Nested keys use double underscore (`MODEL__NAME`, not `MODEL_NAME`). The full re
 | Llama 3.2 1B | 2 / 3 / 5 GB | Llama Community | For quick experiments on small cards. |
 | Mistral 7B | 6 / 8 / 14 GB | Apache 2.0 | Comparable to Qwen 7B, different chat template. |
 | Llama-3.1-8B | 9 / 11 / 18 GB | Llama-3.1-Community | 8B QLoRA, 128K native context (the >700M-MAU clause needs a separate Meta license). |
-| **Qwen2.5-14B** | 25 GiB peak at 4096 ctx (QLoRA) | Apache 2.0 | **The 32 GB daily driver.** rank/alpha 32, 8-bit AdamW. The 4-bit weights alone are about 8.5 GB; a full 4096-token window needs the rest. |
-| Mistral-Small-24B | 26.5 GiB peak at 4096 ctx (QLoRA) | Apache 2.0 | 24B QLoRA on a 32 GB card. The 4-bit weights alone are about 18 GB. |
-| **Qwen2.5-32B** | 28.8 GiB peak at 2048 ctx (QLoRA) | Apache 2.0 | **Top of the 32 GB envelope.** Just fits at `max_len 2048` with 8-bit AdamW. |
+| **Qwen2.5-14B** | 18.7 GiB peak at 4096 ctx (QLoRA) | Apache 2.0 | **The 32 GB daily driver.** rank/alpha 32, 8-bit AdamW. The 4-bit weights alone are about 8.5 GB; a full 4096-token window needs the rest. |
+| Mistral-Small-24B | 22.8 GiB peak at 4096 ctx (QLoRA) | Apache 2.0 | 24B QLoRA on a 32 GB card. The 4-bit weights alone are about 18 GB. |
+| **Qwen2.5-32B** | 26.0 GiB peak at 2048 ctx (QLoRA) | Apache 2.0 | **Top of the 32 GB envelope.** Fits at `max_len 2048` with 8-bit AdamW. |
 
 Other models often work; the rows above are the curated presets — the 14B–32B tier is QLoRA-tuned for a 32 GB card (the measured envelope). For the presets up to 8B, the three figures are QLoRA estimates for the `fast`, `balanced` and `quality` adapter sizes at batch 1 with 2,048-token examples; they err on the high side, and shorter examples use less. The adapter size is chosen for your card: `--lora-preset auto` (the default) takes the largest of `quality` (rank 256 on every linear layer, per Biderman 2024 and Thinking Machines 2025), `balanced` (rank 64 on every linear layer) and `fast` (rank 16 on two layers per block) that fits the memory free on your GPU. Name one to force it. `backprop estimate-vram` prints the estimate for any model and settings.
 

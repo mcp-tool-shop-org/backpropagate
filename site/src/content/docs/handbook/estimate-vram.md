@@ -190,15 +190,17 @@ A 3B model fits `quality` on a 16 GB card, so it keeps it. `--lora-preset qualit
 
 **The automatic batch size is checked the same way.** It starts from the table by card size and is lowered to the largest batch whose estimate is within 90% of free memory. It is never raised above the table's value. With rank 64 on a 16 GB card a 7B model starts at batch 2 (11.7 GB).
 
-On a **32 GB** card (RTX 5090), **measured** peaks, batch 1 at each preset's full context window:
+On a **32 GB** card (RTX 5090), **measured** peaks, batch 1 at each preset's full context window (QLoRA rows re-measured 2026-10-03 on torch 2.8.0, transformers 5.18, trl 1.14; receipts in `docs/receipts/2026-10-03-presets/`):
 
 | Model | Config | GPU (allocated / reserved) | Host RAM |
 |-------|--------|-----------|--------------------|
-| Qwen2.5 32B | QLoRA rank 32, 2,048 tokens | 28.8 / 30.7 GiB (just fits) | — |
+| Qwen2.5 14B | QLoRA rank 32, 4,096 tokens | 18.7 / 20.0 GiB | — |
+| Mistral-Small 24B | QLoRA rank 32, 4,096 tokens | 22.8 / 24.2 GiB | — |
+| Qwen2.5 32B | QLoRA rank 32, 2,048 tokens | 26.0 / 27.2 GiB | — |
 | Qwen2.5 7B | `mode="full"` on the GPU (7.6B > 6B ceiling) | refused → use `--full-ft-offload` | — |
 | Qwen2.5 7B | `mode="full" --full-ft-offload`, 512 tokens | 5.3 / 14.7 GiB | 30.8 GiB training, 32.2 GiB with save |
 
-Qwen2.5 14B and Mistral-Small 24B (rank 32, batch 1 x 4,096 tokens) peaked at 25.0 and 26.5 GiB before the attention change described above. Most of that was the score matrix, so they now need less: the estimate is 17.3 GB and 23.9 GB. They have not been re-measured.
+Before the attention change described above, the same three runs peaked at 25.0, 26.5 and 28.8 GiB (2026-09-30), with the 32B just fitting. Most of that was the score matrix. The formula's estimates for the 14B and 24B rows, 17.3 GB and 23.9 GB, land within 8% of the new measurements.
 
 For the offload path, `estimate_vram(offload=True)` uses the same measured constants as the trainer's fit check and reports `host_ram_gb` (about 39 GB for 7.6B, which includes the save). See [full fine-tuning](/backpropagate/handbook/full-fine-tuning/#the-fit-check).
 

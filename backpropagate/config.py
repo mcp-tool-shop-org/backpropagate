@@ -2069,7 +2069,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         name="qwen2.5-14b",
         model_id="Qwen/Qwen2.5-14B-Instruct",
         description=(
-            "Qwen2.5 14B Instruct — QLoRA, 25.0 GiB peak measured at 4096 "
+            "Qwen2.5 14B Instruct — QLoRA, 18.7 GiB peak measured at 4096 "
             "context, batch 1. The daily driver on a 32GB card."
         ),
         license="Apache-2.0",
@@ -2080,9 +2080,9 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         recommended_packing=True,
         best_for=(
             "The 32GB daily driver — Apache-2.0 14B QLoRA, rank/alpha 32 on "
-            "all-linear, 8-bit AdamW, max_seq 4096. Measured 25.0 GiB peak "
-            "(28.1 reserved) at a full 4096 window, batch 1, RTX 5090, "
-            "2026-09-30. The 4-bit weights alone are ~8.5GB."
+            "all-linear, 8-bit AdamW, max_seq 4096. Measured 18.7 GiB peak "
+            "(20.0 reserved) at a full 4096 window, batch 1, RTX 5090, "
+            "2026-10-03. The 4-bit weights alone are ~8.5GB."
         ),
     ),
     # ----- v1.7: Mistral-Small-24B (Apache 2.0) — the ~24B envelope preset ---
@@ -2090,18 +2090,18 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         name="mistral-small-24b",
         model_id="mistralai/Mistral-Small-24B-Instruct-2501",
         description=(
-            "Mistral Small 24B Instruct (2501) — QLoRA, 26.5 GiB peak "
+            "Mistral Small 24B Instruct (2501) — QLoRA, 22.8 GiB peak "
             "measured at 4096 context, batch 1. Apache-2.0 24B on a 32GB card."
         ),
         license="Apache-2.0",
         recommended_lora_r=32,
-        # 24B fits 4096 on a 32GB card: 26.5 GiB allocated / 29.6 reserved at a
+        # 24B fits 4096 on a 32GB card: 22.8 GiB allocated / 24.2 reserved at a
         # full 4096 window, batch 1 (RTX 5090, 2026-09-30 preset smoke).
         recommended_max_seq_length=4096,
         recommended_packing=True,
         best_for=(
             "Apache-2.0 24B QLoRA on a 32GB card — rank/alpha 32, 8-bit "
-            "AdamW, max_seq 4096. Measured 26.5 GiB peak (29.6 reserved) at "
+            "AdamW, max_seq 4096. Measured 22.8 GiB peak (24.2 reserved) at "
             "a full 4096 window, batch 1. The 4-bit weights alone are ~18GB."
         ),
     ),
@@ -2110,8 +2110,8 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         name="qwen2.5-32b",
         model_id="Qwen/Qwen2.5-32B-Instruct",
         description=(
-            "Qwen2.5 32B Instruct — QLoRA, 28.8 GiB peak measured at 2048 "
-            "context, batch 1. The top of the 32GB envelope: it just fits."
+            "Qwen2.5 32B Instruct — QLoRA, 26.0 GiB peak measured at 2048 "
+            "context, batch 1. The top of the 32GB envelope."
         ),
         license="Apache-2.0",
         recommended_lora_r=32,
@@ -2122,8 +2122,9 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         recommended_packing=True,
         best_for=(
             "The largest model the 32GB envelope holds — Apache-2.0 32B QLoRA, "
-            "8-bit AdamW, ONLY with max_seq at 2048. Measured 28.8 GiB peak "
-            "(30.7 reserved, ~0.65 GiB to spare) at a full 2048 window, batch 1."
+            "8-bit AdamW, ONLY with max_seq at 2048. Measured 26.0 GiB peak "
+            "(27.2 reserved, ~4 GiB to spare) at a full 2048 window, batch 1, "
+            "RTX 5090, 2026-10-03."
         ),
     ),
 }

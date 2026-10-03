@@ -1,14 +1,14 @@
 # backpropagate: how it works
 
-Mapped at 2026-10-02 from commit d999f0f by Atlas 1.24.0.
+Mapped at 2026-10-03 from commit dd2ed98 by Atlas 1.24.0.
 
 ## What this is
 
 13 parts, mostly Python (272 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.
 
-## What changed since 2026-10-02 (5fbeab5)
+## What changed since 2026-10-03 (b28757d)
 
-Nothing structural changed since 2026-10-02; 3 files added and 22 changed content.
+Nothing structural changed since 2026-10-03; 3 files added.
 
 ## What comes in
 
@@ -97,7 +97,7 @@ No two parts export a helper that looks alike.
 
 ## Hand-authored
 
-People write .claude/, .github/, assets/, docs/, examples/, requirements/ and site/; 12 writes with paths built at run time may land here.
+People write .claude/, .github/, assets/, docs/, examples/, requirements/ and site/; 13 writes with paths built at run time may land here.
 
 ## Where to start
 
@@ -109,12 +109,13 @@ Read those in order to follow one pull request end to end.
 
 - 56 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.
 - 16 imports could not be resolved: `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; `tests/test_full_ft_offload_smoke.py` imports a path built at run time; and 13 more.
-- 12 writes and 19 reads use paths built at run time and are not named here.
-- 51 writes and 106 reads go to a path their caller passes, not to this repository.
+- 13 writes and 19 reads use paths built at run time and are not named here.
+- 49 writes and 107 reads go to a path their caller passes, not to this repository.
 - 5 writes and 4 reads go to the home directory (.backpropagate/, .cache/ and AppData/), not to this repository.
 - 4 writes go to a temporary directory, not to this repository.
 - 2 reads go to the directory the command is run in, not to this repository.
 - 1 write goes to the home directory (AppData/, Library/ and backpropagate/) or a path its caller passes, not to this repository.
+- 1 write goes to a temporary directory or a path its caller passes, not to this repository.
 - There is a compose.yaml that no workflow runs; what deploys from it does so from outside this repository, and is not on this page.
 - 1 file belongs to no part: docker/fetch_bun.py.
 

@@ -16,7 +16,7 @@
 
 ### Default safety posture
 
-- [ ] `[cli|mcp|desktop]` SKIP: no dangerous actions (kill/delete/restart) — trains models and exports files
+- [x] `[cli|mcp|desktop]` Dangerous actions (kill, delete, restart) require explicit `--allow-*` flag (2026-10-03) — code execution in `backprop eval --metric pass_rate` needs `--allow-code-exec`; the web UI's delete-cached-model and Clean up actions ask for confirmation and nothing is deleted automatically
 - [x] `[cli|mcp|desktop]` File operations constrained to known directories (2026-02-27) — safe_path() with traversal protection
 - [ ] `[mcp]` SKIP: not an MCP server
 - [ ] `[mcp]` SKIP: not an MCP server
@@ -28,7 +28,7 @@
 - [x] `[cli]` No raw stack traces without `--debug` (2026-02-27) — only with --verbose
 - [ ] `[mcp]` SKIP: not an MCP server
 - [ ] `[mcp]` SKIP: not an MCP server
-- [ ] `[desktop]` SKIP: not a desktop app
+- [x] `[desktop]` Errors shown as user-friendly messages — no raw exceptions in UI (2026-10-03) — the web UI (pip and Store) shows the error code with a plain-language hint and the last log lines; refusals are redacted and capped; no stack traces
 - [ ] `[vscode]` SKIP: not a VS Code extension
 
 ## C. Operator Docs
@@ -51,7 +51,7 @@
 - [x] `[pypi]` `python_requires` set (2026-02-27) — >=3.10
 - [x] `[pypi]` Clean wheel + sdist build (2026-02-27) — hatchling, twine check in CI
 - [ ] `[vsix]` SKIP: not a VS Code extension
-- [ ] `[desktop]` SKIP: not a desktop app
+- [x] `[desktop]` Installer/package builds and runs on stated platforms (2026-10-03) — the Store MSIX is built by `scripts/build_msix.py` behind gates (CUDA op on the build GPU, llama.cpp manifest, size, MAX_PATH), registered and launched on Windows 11, WACK overall warning with no hard failures (issue #310 lists the optional findings)
 
 ## E. Identity (soft gate — does not block ship)
 

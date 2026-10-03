@@ -19,14 +19,15 @@ It applies to every way of installing backpropagate: `pip`, Docker, and the Micr
 | You export to Ollama | The Ollama server **on your own machine** (`localhost:11434`) | The exported model. Nothing leaves the machine, unless you have set `OLLAMA_HOST` to another machine: the `ollama` command follows it. |
 | You start the UI with `backprop ui --share` | Cloudflare's tunnel service (`*.trycloudflare.com`) | Your UI's traffic, so that people with the URL and password can reach it. Only with `--share`; see [Security](/backpropagate/handbook/security/). |
 | The UI starts | The Python Package Index (`pypi.org`) | The UI framework (Reflex) checks whether a newer Reflex release exists. Set `REFLEX_CHECK_LATEST_VERSION=false` to turn this off. The check gives up quietly after two seconds when you are offline. |
+| The UI starts for the first time after a `pip` install or upgrade | GitHub (`raw.githubusercontent.com` for the runtime's install script, `github.com` for the runtime itself) and the npm registry (`registry.npmjs.org`) | The UI framework fetches its JavaScript runtime (bun), if it is not installed yet, and the page's JavaScript packages, to build the page once per version. The Microsoft Store package ships both ready-made and makes no such request; if its bundled frontend cannot be used, it says so at startup and falls back to the same build. |
 
 Since 1.8.1 the UI framework's own usage telemetry is switched off (`telemetry_enabled=False`). Versions before 1.8.1 left it on, and each UI launch sent an anonymous usage event to Reflex's analytics service.
 
-By default the web UI listens only on `127.0.0.1`, so other machines cannot reach it, and it requires the token printed at startup.
+By default the web UI listens only on `127.0.0.1`, so other machines cannot reach it, and it requires the token printed at startup. The token leaves the address bar after the first request and is not written to the server's access log.
 
 ## Your Hugging Face token
 
-backpropagate reads your token from, in order: the `--token` flag, `HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, or the file `huggingface-cli login` writes (`~/.cache/huggingface/token`). It uses the token only for requests to the Hugging Face Hub. It does not copy it anywhere else. A token you type into the web UI's Export page is kept in memory only and is never written to disk; a training or export job the UI starts receives your `HF_TOKEN` through its environment, as it would from a terminal. In normal (non-verbose) mode, error output is scrubbed of tokens and keys before it is printed.
+backpropagate reads your token from, in order: the `--token` flag, `HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, or the file `huggingface-cli login` writes (`~/.cache/huggingface/token`). It uses the token only for requests to the Hugging Face Hub. It does not copy it anywhere else. A token you type into the web UI's Export page is kept in memory only and is never written to disk; a training or export job the UI starts receives your `HF_TOKEN` through its environment, as it would from a terminal. A token-file path given to the Export page must name an existing file inside `~/.backpropagate/`; only its file name is shown in the browser, and the file is read when the push starts. In normal (non-verbose) mode, error output is scrubbed of tokens and keys before it is printed.
 
 ## What is stored on your machine
 
@@ -38,9 +39,14 @@ backpropagate reads your token from, in order: the `--token` flag, `HF_TOKEN`, `
 | The JavaScript runtime the UI uses (bun) | `%LOCALAPPDATA%\reflex\` on Windows, `~/.local/share/reflex/` on Linux, `~/Library/Application Support/reflex/` on macOS. |
 | The UI's launch token, while the UI runs | `%LOCALAPPDATA%\backpropagate\session-<port>.lock` on Windows, `$XDG_RUNTIME_DIR/backpropagate/` on Linux, `~/Library/Application Support/backpropagate/` on macOS. Deleted when the UI stops. |
 | Downloaded models and datasets | The Hugging Face cache, `~/.cache/huggingface` (or `HF_HOME`). Shared with other Hugging Face tools. |
+| Measurements from `backprop estimate-vram --calibrate` or the UI's **Measure on this GPU** (what training cost on your card; no dataset content) | `~/.backpropagate/vram-calibration.json`, or `BACKPROPAGATE_VRAM_CALIBRATION`. |
 | Log files | Only if you set `BACKPROPAGATE_LOG_FILE`. |
 
 Your datasets and models stay where you put them. backpropagate does not upload them unless you push.
+
+## The Microsoft Store edition
+
+The Store edition never runs code that ships inside a model repository: `trust_remote_code` stays off whatever a setting, an environment variable or a `.env` file says, and a model that needs such code does not load there (`CONFIG_TRUST_REMOTE_CODE_REQUIRED` names the `pip` install, which keeps the opt-in). It installs the library and the web UI only, with no experiment tracker, so nothing is sent to one. Everything it writes stays in your user profile, in the folders listed above.
 
 ## Removing everything
 

@@ -23,7 +23,7 @@ The command prints an address and opens it in your browser. The address carries 
 
 ## 1. Bring your examples
 
-A dataset is a file of examples: a question or instruction, and the answer you want the model to learn. Drop a `.jsonl` or `.json` file on the **Dataset** page and it shows what the trainer will read: the layout it recognised, the first five examples as a conversation, how many examples there are, how many repeat, and how long they are.
+A dataset is a file of examples: a question or instruction, and the answer you want the model to learn. Drop a `.jsonl` or `.json` file on the **Dataset** page and it shows what the trainer will read: the layout it recognised, the first five examples as a conversation, how many examples there are, how many repeat, and how long they are. Uploading a second file with the same name keeps both; the new one gets `-2` added to its name.
 
 ![The Dataset page showing the first examples of an uploaded file, laid out as User and Assistant turns.](../../../assets/web-ui/dataset-preview.png)
 

@@ -285,7 +285,7 @@ backprop ui --share --auth alice:super-secret-password
 
 You'll see the announced URL in the startup banner (and the same URL is added to the `Host` / `Origin` allowlist). The v1.2.0 FastAPI middleware enforces HTTP Basic auth on every request and the `/_event` WebSocket upgrade, so anyone who hits the URL is challenged for the credentials.
 
-**Required:** `--share` without `--auth` exits `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]` (closes the v1.1.x foot-gun published as [GHSA-f65r-h4g3-3h9h](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/GHSA-f65r-h4g3-3h9h)). For the full contract see [security → four-layer defense in depth](/backpropagate/handbook/security/#four-layer-defense-in-depth).
+**Required:** `--share` without `--auth` exits `2` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]` (closes the v1.1.x foot-gun published as [GHSA-f65r-h4g3-3h9h](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/GHSA-f65r-h4g3-3h9h)). For the full contract see [security → four-layer defense in depth](/backpropagate/handbook/security/#four-layer-defense-in-depth).
 
 **If you don't want a public URL:** SSH port-forwarding stays the lower-friction option for "I just want to reach my remote training box from my laptop" — see [security → SSH port-forwarding recipe](/backpropagate/handbook/security/#ssh-port-forwarding-recipe).
 
@@ -349,7 +349,7 @@ chmod 600 ~/.config/backpropagate/auth
 backprop ui --share --auth-file ~/.config/backpropagate/auth
 ```
 
-The CLI reads the file, validates the shape with the same `validate_auth_shape` used for `--auth`, and hands the Reflex subprocess the username and a salted scrypt verifier of the password, never the password itself (1.8.1+). The file is never logged; the credential is redacted from any error output. `--auth` and `--auth-file` are mutually exclusive — passing both exits `1` with `INPUT_AUTH_INVALID_SHAPE`.
+The CLI reads the file, validates the shape with the same `validate_auth_shape` used for `--auth`, and hands the Reflex subprocess the username and a salted scrypt verifier of the password, never the password itself (1.8.1+). The file is never logged; the credential is redacted from any error output. `--auth` and `--auth-file` are mutually exclusive — passing both exits `64` with `INPUT_AUTH_INVALID_SHAPE`.
 
 `--auth-file` satisfies the same `--share` / `--host <non-loopback>` requirement that `--auth` does — passing it means the four-layer defense is satisfied. See [security → auth middleware](/backpropagate/handbook/security/#auth-middleware-v120) for the full mode matrix.
 

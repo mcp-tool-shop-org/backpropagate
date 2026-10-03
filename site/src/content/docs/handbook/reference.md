@@ -52,7 +52,7 @@ See [CLI reference](/backpropagate/handbook/cli-reference/) for every flag, ever
 
 The v1.2.0 FastAPI auth middleware (`backpropagate/ui_app/auth.py::basic_auth_transformer`, wired in `ui_app/app.py` via `rx.App(api_transformer=...)`) enforces credentials on every HTTP route and the `/_event` WebSocket upgrade. `--auth user:pass` flows through `validate_auth_shape`; the Reflex subprocess gets the username and a salted scrypt verifier, never the password (1.8.1+). Without `--auth`, each launch generates a token and prints it in the banner URL. What refuses to start:
 
-- `backprop ui --share` without `--auth` → exits `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]` (a public URL with no credentials is the v1.1.x bug closed by [GHSA-f65r-h4g3-3h9h](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/GHSA-f65r-h4g3-3h9h)).
+- `backprop ui --share` without `--auth` → exits `2` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]` (a public URL with no credentials is the v1.1.x bug closed by [GHSA-f65r-h4g3-3h9h](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/GHSA-f65r-h4g3-3h9h)).
 - `backprop ui --host <non-loopback>` without `--auth` → same code (DNS-rebinding defense).
 - `backprop ui --auth user:pass` when `ENFORCEMENT_AVAILABLE=False` (degraded `[ui]` extra install) → same code.
 

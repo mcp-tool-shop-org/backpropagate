@@ -31,7 +31,7 @@ Status: **stable / production** (Development Status :: 5 — Production/Stable i
 - Real-GPU smokes (`tests/test_*_smoke.py`, integration-marked) run by hand on the rig, never in CI; CI's weekly train smoke is CPU-only. Mocked-green unit tests have repeatedly hidden real training-path bugs — every new training path needs one non-mocked smoke.
 - 8276 tests in tests/ (pinned 2026-10-02; `pytest --collect-only`), 90% coverage floor (single source of truth: `[tool.coverage.report].fail_under = 90` in pyproject.toml; ci.yml reads it via tomllib so the two surfaces stay in lockstep)
 - Python 3.10 → 3.13 supported in CI; 3.10 is supported through at least v1.6 and reaches upstream EOL Oct 2026, scheduled for removal in the first release after that. Prefer 3.11 / 3.12 for new installs (3.11 is the most-tested floor — the UI and Windows cells run on 3.11; macOS cells were dropped in 1.7.1). Plan: 1.8.0 keeps 3.10; the first release after its Oct 2026 EOL drops it
-- Ship Gate hard gates (A–D) last checked 2026-02-27 (scorecard 23/31, 14 SKIP with reasons) — stale; re-run `shipcheck audit` after 1.8.0 ships
+- Ship Gate hard gates (A–D) last checked 2026-10-03 for 1.8.2 (`shipcheck audit`: 27/37 checked, 10 SKIP with reasons, 100% pass). Re-run before each release.
 
 ## User-facing docs surface
 

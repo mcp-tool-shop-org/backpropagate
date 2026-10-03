@@ -119,7 +119,7 @@ export const config: SiteConfig = {
       kind: 'data-table',
       id: 'scorecard',
       title: 'Quality scorecard',
-      subtitle: 'Ship Gate audit — 24/37 checked, 13 skipped (each with justification), 100% pass on every applicable item.',
+      subtitle: 'Ship Gate audit — 27/37 checked, 10 skipped (each with justification), 100% pass on every applicable item.',
       columns: ['Category', 'Score', 'Notes'],
       rows: [
         ['A. Security', '5/8', 'SECURITY.md, trust model, no secrets/telemetry, safe_path(), output-directory denylist; the 3 SKIPs cover destructive-action / MCP rows that do not apply.'],

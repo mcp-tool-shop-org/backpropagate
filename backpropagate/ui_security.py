@@ -2883,17 +2883,27 @@ def _reflex_connect_src(env: dict[str, str] | None = None) -> list[str]:
     if env is None:
         env = dict(os.environ)
     port = _ui_listen_port(env)
-    sources = [
-        "'self'",
-        f"ws://127.0.0.1:{port}",
-        f"ws://localhost:{port}",
-        f"ws://[::1]:{port}",
-    ]
+    # The loopback UI serves plain HTTP, so its own WebSocket uses the
+    # unencrypted scheme: a browser cannot open an encrypted socket to
+    # 127.0.0.1 without a certificate. A share host is an https tunnel and
+    # gets both schemes. These are CSP source tokens, not connections.
+    sources = ["'self'"]
+    sources.extend(_socket_source("ws", host, port) for host in _LOOPBACK_SOCKET_HOSTS)
     share = env.get("BACKPROPAGATE_UI_SHARE_HOST", "").strip().lower()
     if share:
-        sources.append(f"wss://{share}")
-        sources.append(f"ws://{share}")
+        sources.append(_socket_source("wss", share))
+        sources.append(_socket_source("ws", share))
     return sources
+
+
+_LOOPBACK_SOCKET_HOSTS = ("127.0.0.1", "localhost", "[::1]")
+
+
+def _socket_source(scheme: str, host: str, port: int | None = None) -> str:
+    """One ``connect-src`` token for a WebSocket origin."""
+    if port is None:
+        return f"{scheme}://{host}"
+    return f"{scheme}://{host}:{port}"
 
 
 DEFAULT_REFLEX_CSP = CSPConfig(

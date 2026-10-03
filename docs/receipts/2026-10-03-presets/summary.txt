@@ -1,0 +1,14 @@
+sha d06f51de4e91104555c54cc8dcc08b725503ca1d
+{"python": "3.12.3", "torch": "2.8.0+cu128", "cuda": "12.8", "gpu": "NVIDIA GeForce RTX 5090", "vram_total_gib": 31.36, "host_ram_total_gib": 186.3}
+== qwen2.5-14b
+PRESET_SMOKE_RECEIPT {"preset": "qwen2.5-14b", "model": "Qwen/Qwen2.5-14B-Instruct", "kind": "train", "steps": 2, "gpu": "NVIDIA GeForce RTX 5090", "card_total_gb": 31.36, "max_seq_length": 4096, "packing": true, "step_input_lengths": [4096, 4096], "lora_r": 32, "adapter_rank": 32, "final_loss": 0.09747287631034851, "peak_vram_allocated_gb": 18.73, "peak_vram_reserved_gb": 19.97, "preset_description": "Qwen2.5 14B Instruct \u2014 QLoRA, 25.0 GiB peak measured at 4096 context, batch 1. The daily driver on a 32GB card."}
+PASSED
+============ 1 passed, 3 deselected, 4 warnings in 73.09s (0:01:13) ============
+== mistral-small-24b
+PRESET_SMOKE_RECEIPT {"preset": "mistral-small-24b", "model": "mistralai/Mistral-Small-24B-Instruct-2501", "kind": "probe", "steps": 1, "gpu": "NVIDIA GeForce RTX 5090", "card_total_gb": 31.36, "max_seq_length": 4096, "packing": false, "step_input_lengths": [4096], "lora_r": 32, "adapter_rank": null, "final_loss": 0.06844731420278549, "peak_vram_allocated_gb": 22.82, "peak_vram_reserved_gb": 24.15, "preset_description": "Mistral Small 24B Instruct (2501) \u2014 QLoRA, 26.5 GiB peak measured at 4096 context, batch 1. Apache-2.0 24B on a 32GB card."}
+PASSED
+============ 1 passed, 3 deselected, 4 warnings in 79.10s (0:01:19) ============
+== qwen2.5-32b
+PRESET_SMOKE_RECEIPT {"preset": "qwen2.5-32b", "model": "Qwen/Qwen2.5-32B-Instruct", "kind": "probe", "steps": 1, "gpu": "NVIDIA GeForce RTX 5090", "card_total_gb": 31.36, "max_seq_length": 2048, "packing": false, "step_input_lengths": [2048], "lora_r": 32, "adapter_rank": null, "final_loss": 0.164415642619133, "peak_vram_allocated_gb": 25.98, "peak_vram_reserved_gb": 27.23, "preset_description": "Qwen2.5 32B Instruct \u2014 QLoRA, 28.8 GiB peak measured at 2048 context, batch 1. The top of the 32GB envelope: it just fits."}
+PASSED
+=========== 1 passed, 3 deselected, 4 warnings in 141.72s (0:02:21) ============

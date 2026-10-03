@@ -69,7 +69,7 @@
       "confidence": "full",
       "highWater": null,
       "name": "backpropagate",
-      "qualifyingSourceCommits": 123,
+      "qualifyingSourceCommits": 125,
       "rebaseline": null
     },
     {
@@ -185,7 +185,7 @@
       "confidence": "low",
       "highWater": null,
       "name": "scripts",
-      "qualifyingSourceCommits": 15,
+      "qualifyingSourceCommits": 16,
       "rebaseline": null
     },
     {
@@ -201,7 +201,7 @@
       "confidence": "low",
       "highWater": null,
       "name": "site",
-      "qualifyingSourceCommits": 11,
+      "qualifyingSourceCommits": 12,
       "rebaseline": null
     },
     {
@@ -355,8 +355,8 @@
         "path": ".trivyignore"
       },
       {
-        "commits": 97,
-        "lines": 1877,
+        "commits": 101,
+        "lines": 1919,
         "path": "CHANGELOG.md"
       },
       {
@@ -365,8 +365,8 @@
         "path": "CITATION.cff"
       },
       {
-        "commits": 24,
-        "lines": 259,
+        "commits": 25,
+        "lines": 261,
         "path": "CLAUDE.md"
       },
       {
@@ -415,8 +415,8 @@
         "path": "README.ja.md"
       },
       {
-        "commits": 51,
-        "lines": 1817,
+        "commits": 53,
+        "lines": 1869,
         "path": "README.md"
       },
       {
@@ -475,8 +475,8 @@
         "path": "assets/logo.png"
       },
       {
-        "commits": 17,
-        "lines": 566,
+        "commits": 19,
+        "lines": 593,
         "path": "atlas/README.md"
       },
       {
@@ -485,18 +485,18 @@
         "path": "atlas/boundaries.yaml"
       },
       {
-        "commits": 17,
-        "lines": 2188,
+        "commits": 19,
+        "lines": 2265,
         "path": "atlas/page.json"
       },
       {
-        "commits": 17,
-        "lines": 11833,
+        "commits": 19,
+        "lines": 12166,
         "path": "atlas/statistics.json"
       },
       {
-        "commits": 17,
-        "lines": 48282,
+        "commits": 19,
+        "lines": 49737,
         "path": "atlas/structure.json"
       },
       {
@@ -695,13 +695,13 @@
         "path": "backpropagate/checkpoints.py"
       },
       {
-        "commits": 83,
-        "lines": 23411,
+        "commits": 84,
+        "lines": 23440,
         "path": "backpropagate/cli.py"
       },
       {
-        "commits": 43,
-        "lines": 4364,
+        "commits": 45,
+        "lines": 4461,
         "path": "backpropagate/config.py"
       },
       {
@@ -725,8 +725,8 @@
         "path": "backpropagate/eval.py"
       },
       {
-        "commits": 38,
-        "lines": 2937,
+        "commits": 39,
+        "lines": 2978,
         "path": "backpropagate/exceptions.py"
       },
       {
@@ -960,8 +960,8 @@
         "path": "backpropagate/ui_app/pages/dataset.py"
       },
       {
-        "commits": 23,
-        "lines": 1997,
+        "commits": 24,
+        "lines": 2010,
         "path": "backpropagate/ui_app/pages/export.py"
       },
       {
@@ -1011,11 +1011,11 @@
       },
       {
         "commits": 40,
-        "lines": 5391,
+        "lines": 5401,
         "path": "backpropagate/ui_security.py"
       },
       {
-        "commits": 48,
+        "commits": 47,
         "lines": 10184,
         "path": "backpropagate/ui_state.py"
       },
@@ -1025,8 +1025,8 @@
         "path": "backpropagate/ui_theme.py"
       },
       {
-        "commits": 3,
-        "lines": 223,
+        "commits": 4,
+        "lines": 303,
         "path": "backpropagate/ui_workdir.py"
       },
       {
@@ -1813,6 +1813,41 @@
         "commits": 1,
         "lines": 37,
         "path": "docs/receipts/2026-09-30-offload/smollm3_puregpu.json"
+      },
+      {
+        "commits": 1,
+        "lines": 21,
+        "path": "docs/receipts/2026-10-03-presets/README.md"
+      },
+      {
+        "commits": 1,
+        "lines": 4,
+        "path": "docs/receipts/2026-10-03-presets/constraints.txt"
+      },
+      {
+        "commits": 1,
+        "lines": 1,
+        "path": "docs/receipts/2026-10-03-presets/env.json"
+      },
+      {
+        "commits": 1,
+        "lines": 35,
+        "path": "docs/receipts/2026-10-03-presets/preset_mistral-small-24b.log"
+      },
+      {
+        "commits": 1,
+        "lines": 33,
+        "path": "docs/receipts/2026-10-03-presets/preset_qwen2.5-14b.log"
+      },
+      {
+        "commits": 1,
+        "lines": 34,
+        "path": "docs/receipts/2026-10-03-presets/preset_qwen2.5-32b.log"
+      },
+      {
+        "commits": 1,
+        "lines": 14,
+        "path": "docs/receipts/2026-10-03-presets/summary.txt"
       },
       {
         "commits": 1,
@@ -2925,8 +2960,8 @@
         "path": "scripts/README.md"
       },
       {
-        "commits": 2,
-        "lines": 844,
+        "commits": 3,
+        "lines": 1157,
         "path": "scripts/build_msix.py"
       },
       {
@@ -3080,28 +3115,28 @@
         "path": "site/src/assets/web-ui/training.png"
       },
       {
-        "commits": 9,
-        "lines": 112,
+        "commits": 10,
+        "lines": 114,
         "path": "site/src/content/docs/handbook/beginners.md"
       },
       {
-        "commits": 40,
-        "lines": 1233,
+        "commits": 41,
+        "lines": 1243,
         "path": "site/src/content/docs/handbook/cli-reference.md"
       },
       {
-        "commits": 40,
-        "lines": 481,
+        "commits": 42,
+        "lines": 483,
         "path": "site/src/content/docs/handbook/env-vars.md"
       },
       {
-        "commits": 28,
-        "lines": 318,
+        "commits": 29,
+        "lines": 320,
         "path": "site/src/content/docs/handbook/error-codes.md"
       },
       {
-        "commits": 10,
-        "lines": 620,
+        "commits": 11,
+        "lines": 628,
         "path": "site/src/content/docs/handbook/estimate-vram.md"
       },
       {
@@ -3115,8 +3150,8 @@
         "path": "site/src/content/docs/handbook/full-fine-tuning.md"
       },
       {
-        "commits": 18,
-        "lines": 246,
+        "commits": 20,
+        "lines": 250,
         "path": "site/src/content/docs/handbook/getting-started.md"
       },
       {
@@ -3125,8 +3160,8 @@
         "path": "site/src/content/docs/handbook/index.md"
       },
       {
-        "commits": 12,
-        "lines": 904,
+        "commits": 13,
+        "lines": 906,
         "path": "site/src/content/docs/handbook/migrations.md"
       },
       {
@@ -3135,28 +3170,28 @@
         "path": "site/src/content/docs/handbook/preference-tuning.md"
       },
       {
-        "commits": 2,
-        "lines": 58,
+        "commits": 4,
+        "lines": 76,
         "path": "site/src/content/docs/handbook/privacy.md"
       },
       {
-        "commits": 9,
-        "lines": 826,
+        "commits": 10,
+        "lines": 830,
         "path": "site/src/content/docs/handbook/recipes.md"
       },
       {
-        "commits": 16,
-        "lines": 266,
+        "commits": 18,
+        "lines": 272,
         "path": "site/src/content/docs/handbook/reference.md"
       },
       {
-        "commits": 10,
-        "lines": 402,
+        "commits": 12,
+        "lines": 425,
         "path": "site/src/content/docs/handbook/security.md"
       },
       {
-        "commits": 13,
-        "lines": 100,
+        "commits": 14,
+        "lines": 114,
         "path": "site/src/content/docs/handbook/training.md"
       },
       {
@@ -3170,8 +3205,8 @@
         "path": "site/src/content/docs/handbook/troubleshooting.md"
       },
       {
-        "commits": 1,
-        "lines": 80,
+        "commits": 2,
+        "lines": 82,
         "path": "site/src/content/docs/handbook/web-ui.md"
       },
       {
@@ -3185,8 +3220,8 @@
         "path": "site/src/pages/index.astro"
       },
       {
-        "commits": 15,
-        "lines": 78,
+        "commits": 16,
+        "lines": 90,
         "path": "site/src/site-config.ts"
       },
       {
@@ -3340,8 +3375,8 @@
         "path": "tests/test_block_engine_trainer.py"
       },
       {
-        "commits": 2,
-        "lines": 325,
+        "commits": 3,
+        "lines": 538,
         "path": "tests/test_build_msix.py"
       },
       {
@@ -3440,8 +3475,8 @@
         "path": "tests/test_cli_cov_train.py"
       },
       {
-        "commits": 5,
-        "lines": 631,
+        "commits": 6,
+        "lines": 710,
         "path": "tests/test_cli_cov_ui.py"
       },
       {
@@ -3990,8 +4025,8 @@
         "path": "tests/test_trainer_simpo_kto.py"
       },
       {
-        "commits": 1,
-        "lines": 307,
+        "commits": 2,
+        "lines": 457,
         "path": "tests/test_trust_remote_code.py"
       },
       {
@@ -4050,7 +4085,7 @@
         "path": "tests/test_ui_cov_state_forms.py"
       },
       {
-        "commits": 6,
+        "commits": 5,
         "lines": 1296,
         "path": "tests/test_ui_cov_state_runs.py"
       },
@@ -4141,7 +4176,7 @@
       },
       {
         "commits": 1,
-        "lines": 362,
+        "lines": 367,
         "path": "tests/test_ui_sandbox_mediums.py"
       },
       {
@@ -4160,7 +4195,7 @@
         "path": "tests/test_ui_small_things.py"
       },
       {
-        "commits": 24,
+        "commits": 23,
         "lines": 7096,
         "path": "tests/test_ui_states.py"
       },
@@ -4185,8 +4220,8 @@
         "path": "tests/test_ui_v2_p3_flow.py"
       },
       {
-        "commits": 2,
-        "lines": 214,
+        "commits": 3,
+        "lines": 335,
         "path": "tests/test_ui_workdir.py"
       },
       {
@@ -4265,9 +4300,9 @@
     "level": "full",
     "reason": "at least 30 qualifying commits, and at least 20 source files reach 10 revisions"
   },
-  "generatedAt": "2026-10-02T22:44:08.334Z",
+  "generatedAt": "2026-10-03T04:52:24.630Z",
   "generatedFrom": {
-    "commit": "d999f0fc0c64d8fddbdf5ea1646434e16241ced9"
+    "commit": "dd2ed9840442bf0248451ab959072de55830cfca"
   },
   "pairs": [
     {
@@ -4420,58 +4455,58 @@
     {
       "a": "atlas/README.md",
       "b": "atlas/page.json",
-      "either": 13,
-      "shared": 13,
+      "either": 15,
+      "shared": 15,
       "strength": 1
     },
     {
       "a": "atlas/README.md",
       "b": "atlas/statistics.json",
-      "either": 13,
-      "shared": 13,
+      "either": 15,
+      "shared": 15,
       "strength": 1
     },
     {
       "a": "atlas/README.md",
       "b": "atlas/structure.json",
-      "either": 13,
-      "shared": 13,
+      "either": 15,
+      "shared": 15,
       "strength": 1
     },
     {
       "a": "atlas/page.json",
       "b": "atlas/statistics.json",
-      "either": 13,
-      "shared": 13,
+      "either": 15,
+      "shared": 15,
       "strength": 1
     },
     {
       "a": "atlas/page.json",
       "b": "atlas/structure.json",
-      "either": 13,
-      "shared": 13,
+      "either": 15,
+      "shared": 15,
       "strength": 1
     },
     {
       "a": "atlas/statistics.json",
       "b": "atlas/structure.json",
-      "either": 13,
-      "shared": 13,
+      "either": 15,
+      "shared": 15,
       "strength": 1
     },
     {
       "a": "backpropagate/exceptions.py",
       "b": "site/src/content/docs/handbook/error-codes.md",
-      "either": 26,
+      "either": 28,
       "shared": 14,
-      "strength": 0.538462
+      "strength": 0.5
     },
     {
       "a": "site/src/content/docs/handbook/cli-reference.md",
       "b": "site/src/content/docs/handbook/env-vars.md",
-      "either": 31,
-      "shared": 19,
-      "strength": 0.612903
+      "either": 33,
+      "shared": 20,
+      "strength": 0.606061
     }
   ],
   "parameters": {
@@ -4484,16 +4519,16 @@
     "floor": "strong",
     "floorHeld": false,
     "floorTrigger": null,
-    "headDate": "2026-10-02T18:43:35-04:00",
-    "inScopeFiles": 782,
+    "headDate": "2026-10-03T00:51:30-04:00",
+    "inScopeFiles": 789,
     "pinnedStart": null,
     "priorFloor": "strong",
-    "qualifyingCommits": 230,
+    "qualifyingCommits": 233,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 10,
-    "since": "2026-04-05T22:43:35.000Z",
+    "since": "2026-04-06T04:51:30.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",

@@ -268,6 +268,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The 32 GB-envelope QLoRA rows are re-measured** on an RTX 5090 with the
+  current stack (torch 2.8.0+cu128, transformers 5.18, trl 1.14, peft 0.21.2,
+  bitsandbytes 0.50.2), 2026-10-03: Qwen2.5-14B 18.7 GiB peak at 4096 context
+  (was 25.0), Mistral-Small-24B 22.8 GiB at 4096 (was 26.5), Qwen2.5-32B 26.0 GiB
+  at 2048 (was 28.8, "just fits"; now about 4 GiB to spare). The drop follows
+  the memory-efficient attention path (#292). The README, the preset texts and
+  the VRAM handbook page carry the new numbers; receipts in
+  `docs/receipts/2026-10-03-presets/`.
 - **`backprop ui` runs from a per-user folder** (#271):
   `%LOCALAPPDATA%\backpropagate\ui\<version>-<hash>` on Windows,
   `~/.cache/backpropagate/ui/<version>-<hash>` elsewhere, instead of the

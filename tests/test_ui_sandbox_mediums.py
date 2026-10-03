@@ -107,17 +107,22 @@ class TestJunctionDetectionFallbacks:
         def denied(self):
             raise OSError("denied")
 
-        monkeypatch.setattr(Path, "is_junction", denied)
+        # 3.10 and 3.11 have no Path.is_junction; add it there so every
+        # interpreter exercises the same branch.
+        monkeypatch.setattr(Path, "is_junction", denied, raising=False)
         assert sec._path_is_junction(path) is True
 
         def missing(self):
             raise FileNotFoundError("gone")
 
-        monkeypatch.setattr(Path, "is_junction", missing)
+        monkeypatch.setattr(Path, "is_junction", missing, raising=False)
         assert sec._path_is_junction(path) is False
 
     def test_os_isjunction_errors(self, tmp_path, monkeypatch):
-        monkeypatch.delattr(Path, "is_junction", raising=False)
+        # On 3.13 Path.is_junction is inherited from a base class, so a
+        # delattr on Path does nothing; a None attribute is not callable and
+        # sends the helper to the os.path branch on every interpreter.
+        monkeypatch.setattr(Path, "is_junction", None, raising=False)
         monkeypatch.setattr(os.path, "isjunction", lambda _path: True, raising=False)
         assert sec._path_is_junction(tmp_path) is True
 
@@ -152,8 +157,8 @@ class TestJunctionDetectionFallbacks:
         assert sec._reparse_point(plain) is True
 
     def test_lstat_fallback_is_used_when_no_helper_exists(self, tmp_path, monkeypatch):
-        monkeypatch.delattr(Path, "is_junction", raising=False)
-        monkeypatch.delattr(os.path, "isjunction", raising=False)
+        monkeypatch.setattr(Path, "is_junction", None, raising=False)
+        monkeypatch.setattr(os.path, "isjunction", None, raising=False)
         plain = tmp_path / "plain-dir"
         plain.mkdir()
         assert sec._path_is_junction(plain) is False

@@ -289,6 +289,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-user working folder cannot be created and the package is read-only
   (the Store layout): it stops with `RUNTIME_UI_WORKDIR_UNAVAILABLE` naming
   the folder and `BACKPROPAGATE_UI_WORKDIR`.
+- **Web UI sandbox and uploads hardened.** The UI output folder is refused
+  when a symlink or a Windows junction stands in for it or for any folder
+  below the home folder, checked before the path is resolved and before
+  anything is created. A second upload with the same file name is stored as
+  `name-2.ext` instead of overwriting the first, and uploads are
+  content-sniffed by default (`BACKPROPAGATE_SECURITY__VALIDATE_FILE_MAGIC=false`
+  turns that off). A run's checkpoint folder and log are read only when
+  they lie inside the UI output folder, and so is a Runs-page folder
+  override. Deleting a cached model refuses a junction and the cache root
+  itself. A Hub token-file path given to the Export page must be an
+  existing file inside `~/.backpropagate/`, is re-checked when the push
+  starts, and only its file name reaches the browser; the push also
+  re-checks that the source folder is still inside the UI output folder.
+  Output folders, log tails, checkpoint paths and refusals shown in the
+  browser no longer carry the home folder (a job's output is shown
+  relative to the UI output folder), and refusals are capped at 400
+  characters.
 - **A HuggingFace token typed into the Export page is no longer written to
   disk.** The web UI's framework saves each browser session's state to
   `.states/` in the UI working directory, and that included the token field

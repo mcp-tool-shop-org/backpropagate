@@ -411,10 +411,17 @@ class TestFileValidatorAdversarial:
         ok, _msg, path = self._validator(validate_file_magic=True).validate(_upload(f))
         assert ok is True and path == f
 
-    def test_magic_check_off_by_default_lets_spoof_through(self, tmp_path):
+    def test_magic_check_on_by_default_rejects_a_spoof(self, tmp_path):
         f = tmp_path / "pretend.jsonl"
         f.write_bytes(b"<html>")
-        assert self._validator().validate(_upload(f))[0] is True  # documents why the flag matters
+        ok, msg, path = self._validator().validate(_upload(f))
+        assert ok is False and path is None and "magic-bytes" in msg
+
+    def test_magic_check_can_be_turned_off(self, tmp_path):
+        f = tmp_path / "pretend.jsonl"
+        f.write_bytes(b"<html>")
+        ok, _msg, path = self._validator(validate_file_magic=False).validate(_upload(f))
+        assert ok is True and path == f
 
     @pytest.mark.parametrize("name", ["data.jsonl", ".hidden.jsonl"])
     def test_filename_sanitised_event_is_emitted_when_name_changes(self, name, monkeypatch):
@@ -909,6 +916,7 @@ class TestValidateFileMagicAdversarial:
             (b"<SCRIPT>", ".json", False, "HTML/script"),
             (b"plain,csv,data\n1,2,3\n", ".csv", True, "No signature check"),
             (b'{"a":1}', ".jsonl", True, "Signature valid"),
+            (b'"plain text"\n', ".jsonl", True, "Signature valid"),
             (b"[1,2]", ".json", True, "Signature valid"),
             (b"PAR1xxxx", ".parquet", True, "Signature valid"),
             (b"GGUF\x03", ".gguf", True, "Signature valid"),

@@ -170,8 +170,14 @@ def test_a_new_upload_replaces_everything_from_the_last_one(loaded):
 
 
 def test_the_same_name_uploaded_again_is_read_again(loaded):
+    first = Path(loaded._uploaded_path)
+    before = first.read_bytes()
     _upload(loaded, _jsonl(_ROWS[:3]))  # data.jsonl again, different content
+    assert first.read_bytes() == before
+    assert loaded.uploaded_basename == "data-2.jsonl"
     assert (loaded.record_count, loaded.dedup_hits) == (3, 1)
+    loaded.save_cleaned_copy()
+    assert loaded.prepared_name == "data-2-prepared.jsonl"
 
 
 # ---- the settings change what would be kept, as they change -------------------------

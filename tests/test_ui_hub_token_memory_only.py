@@ -87,13 +87,24 @@ def test_a_push_after_a_restart_asks_for_the_token_again(monkeypatch):
     assert s.hub_token_set is False
 
 
-def test_a_successful_push_forgets_the_token(monkeypatch):
+def test_a_successful_push_forgets_the_token(monkeypatch, tmp_path):
+    from pathlib import Path
+
     import backpropagate.export as export_mod
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("BACKPROPAGATE_UI__OUTPUT_DIR", raising=False)
+    adapter = home / ".backpropagate" / "ui-outputs" / "adapter"
+    adapter.mkdir(parents=True)
 
     seen = {}
     monkeypatch.setattr(export_mod, "push_to_hub", lambda **kw: seen.update(kw), raising=False)
     s = _state("tab-1")
-    s.source_model_path = "model-out"
+    s.set_source_model_path(str(adapter))
     s.set_hub_repo_id("owner/repo")
     s.set_hub_token(SECRET)
     s.push_to_hub()

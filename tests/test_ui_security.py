@@ -297,24 +297,21 @@ class TestFileValidator:
             assert "not allowed" in error.lower() or "not supported" in error.lower()
             assert path is None, f"Path must be None for rejected file {fname}"
 
-    def test_accepts_safe_extensions(self):
-        """Should accept safe dataset extensions."""
+    def test_accepts_safe_extensions(self, tmp_path):
+        """Should accept safe dataset extensions when the content matches."""
         from backpropagate.ui_security import FileValidator
 
         validator = FileValidator()
+        dataset = tmp_path / "test.jsonl"
+        dataset.write_text('{"a": 1}\n', encoding="utf-8")
 
-        # Create mock file with .jsonl extension
-        with patch.object(Path, 'exists', return_value=True):
-            with patch.object(Path, 'stat') as mock_stat:
-                mock_stat.return_value.st_size = 1024
+        file_obj = MagicMock()
+        file_obj.name = str(dataset)
 
-                file_obj = MagicMock()
-                file_obj.name = "/tmp/test.jsonl"
-
-                valid, error, path = validator.validate(file_obj)
-                assert valid is True, "Valid file must be accepted"
-                assert error == "", "Error must be empty for valid file"
-                assert path is not None, "Path must be returned for valid file"
+        valid, error, path = validator.validate(file_obj)
+        assert valid is True, error
+        assert error == ""
+        assert path is not None
 
     def test_rejects_file_too_large(self):
         """Should reject files that exceed size limit.
@@ -1237,12 +1234,12 @@ class TestSecurityConfigNewFields:
         assert config.health_check_enabled is True
         assert config.health_check_include_gpu is True
 
-    def test_validate_file_magic_disabled_by_default(self):
-        """File magic validation should be disabled by default."""
+    def test_validate_file_magic_enabled_by_default(self):
+        """Content sniffing is on unless the operator turns it off."""
         from backpropagate.ui_security import SecurityConfig
 
         config = SecurityConfig()
-        assert config.validate_file_magic is False
+        assert config.validate_file_magic is True
 
 
 # =============================================================================

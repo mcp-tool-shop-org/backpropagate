@@ -287,14 +287,74 @@ def _forbidden_output_bases() -> list[Path]:
     return resolved
 
 
+def _path_is_junction(path: Path) -> bool:
+    """True when ``path`` is a Windows junction. A missing path is not one.
+
+    ``Path.is_junction`` (3.12+) and ``os.path.isjunction`` know a junction
+    from other reparse points. Older interpreters fall back to the
+    reparse-point attribute on ``os.lstat``. A stat error other than
+    "not found" is treated as a junction (fail closed).
+    """
+    junction = getattr(path, "is_junction", None)
+    if callable(junction):
+        try:
+            return bool(junction())
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return True
+    os_checker = getattr(os.path, "isjunction", None)
+    if callable(os_checker):
+        try:
+            return bool(os_checker(os.fspath(path)))
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return True
+    if os.name != "nt":
+        return False
+    return _reparse_point(path)
+
+
+def _reparse_point(path: Path) -> bool:
+    """True when ``os.lstat`` shows the Windows reparse-point attribute.
+
+    Used only when the interpreter has no ``is_junction``. A missing path
+    is not a reparse point. Any other stat error is treated as one.
+    """
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    # stat.FILE_ATTRIBUTE_REPARSE_POINT. Symlinks already returned above.
+    return bool(getattr(st, "st_file_attributes", 0) & 0x400)
+
+
+def _is_symlink_or_junction(path: Path) -> bool:
+    """True when ``path`` is a symlink or a Windows junction.
+
+    ``Path.resolve`` follows both. ``Path.is_symlink`` is false for a
+    junction. A missing path is neither. Any other stat failure is treated
+    as a link (fail closed).
+    """
+    try:
+        if path.is_symlink():
+            return True
+    except OSError:
+        return True
+    return _path_is_junction(path)
+
+
 def _is_forbidden_output_base(path: Path) -> bool:
     """
     Return True if ``path`` resolves to (or under) any denylisted category.
 
     The check uses ``Path.is_relative_to`` (Python 3.9+) for ancestor
     matching, plus an exact-equality check so that, e.g., ``Path('/etc')``
-    itself is rejected. ``path`` is expected to already be resolved by the
-    caller; we resolve defensively in case it isn't.
+    itself is rejected. Callers pass the unresolved path: a symlink or
+    junction below home is refused before ``resolve``.
 
     Liberal-by-design: when the candidate is strictly inside the current
     user's home directory, system-tree rejections (``/var``, ``/usr``,
@@ -313,30 +373,23 @@ def _is_forbidden_output_base(path: Path) -> bool:
     previously slip through by masking its true target behind ``.resolve()``.
     We now reject the candidate if any path component STRICTLY BELOW the home
     root (i.e. the user-controlled tail, not the home prefix itself) is a
-    symlink. A legitimate UI output dir under home never needs to traverse a
-    symlink; refusing one closes the "symlink under $HOME hides its target"
-    class without breaking setups where home itself (or a system mount like
-    macOS ``/var`` → ``/private/var``) is the symlink. Operators who
-    deliberately want a symlinked output dir should point the env var at the
-    link's target directly (the env-var-must-not-traverse-symlinks-below-home
-    constraint).
+    symlink or a Windows junction. The walk looks at the unresolved path and
+    runs before ``resolve()``: ``resolve`` follows both, and ``is_symlink``
+    is false for a junction. A legitimate UI output dir under home never
+    needs to traverse either. Refusing one closes the "link under $HOME hides
+    its target" class without breaking setups where home itself (or a system
+    mount like macOS ``/var`` → ``/private/var``) is the symlink. Operators
+    who deliberately want a linked output dir should point the env var at the
+    link's target directly.
     """
-    try:
-        candidate = path.expanduser().resolve()
-    except (OSError, RuntimeError):
-        # If we can't even resolve it, treat as forbidden (fail-closed).
-        return True
-
     try:
         home = Path.home().resolve()
     except (OSError, RuntimeError):
         home = None
 
-    # UI-A-007: reject a symlink in the user-controlled tail below home.
-    # Walk the PRE-resolved path's ancestry from the leaf up; if any element
-    # that lives strictly below the home root is a symlink, treat the base as
-    # forbidden. We use the un-resolved expansion so the symlink itself is
-    # observable (``.resolve()`` would have already collapsed it).
+    # Reject a symlink or junction in the user-controlled tail below home
+    # BEFORE resolving. Resolving first would follow the link and the walk
+    # would only see the target.
     if home is not None:
         try:
             pre = path.expanduser()
@@ -345,7 +398,7 @@ def _is_forbidden_output_base(path: Path) -> bool:
         if pre is not None:
             for ancestor in (pre, *pre.parents):
                 # Boundary check on the UNRESOLVED ancestor — resolving here
-                # would collapse a symlink to its (out-of-home) target and hide
+                # would collapse a link to its (out-of-home) target and hide
                 # the very component we must catch. Stop once we climb to or
                 # above the home root (the home prefix and anything above it is
                 # out of the operator's per-output-dir control and may
@@ -356,17 +409,19 @@ def _is_forbidden_output_base(path: Path) -> bool:
                     below_home = False
                 if not below_home:
                     break
-                try:
-                    if ancestor.is_symlink():
-                        log_security_event(
-                            "ui_output_dir_symlink_below_home",
-                            requested=str(pre),
-                            symlink_component=str(ancestor),
-                        )
-                        return True
-                except OSError:
-                    # If we can't stat it, fail closed for this component.
+                if _is_symlink_or_junction(ancestor):
+                    log_security_event(
+                        "ui_output_dir_symlink_below_home",
+                        requested=str(pre),
+                        symlink_component=str(ancestor),
+                    )
                     return True
+
+    try:
+        candidate = path.expanduser().resolve()
+    except (OSError, RuntimeError):
+        # If we can't even resolve it, treat as forbidden (fail-closed).
+        return True
 
     # Set of "credential" forbidden roots, computed identically here to the
     # main list so we can selectively enforce them inside the home directory.
@@ -445,27 +500,32 @@ def get_ui_output_dir() -> Path:
     The directory is created (with parents) on first call so the path is
     immediately writable. The directory's permissions are NOT chmod'd —
     that's the operator's responsibility.
+
+    Links are refused on the unresolved path, before ``resolve`` and before
+    ``mkdir``, so a junction standing in for this folder is not followed
+    and its target is not created.
     """
     override = os.environ.get("BACKPROPAGATE_UI__OUTPUT_DIR", "").strip()
     if override:
-        base = Path(override).expanduser().resolve()
+        requested = Path(override).expanduser()
     else:
-        base = (Path.home() / ".backpropagate" / "ui-outputs").resolve()
+        requested = Path.home() / ".backpropagate" / "ui-outputs"
 
-    # FB-003: refuse to mkdir into a system / credential directory.
-    if _is_forbidden_output_base(base):
+    # FB-003: refuse to mkdir into a system / credential directory, or through
+    # a symlink or junction below the home folder. Checked before resolve.
+    if _is_forbidden_output_base(requested):
         from .exceptions import BackpropagateError
 
         categories_hint = "; ".join(_FORBIDDEN_OUTPUT_BASE_CATEGORIES)
         log_security_event(
             "ui_output_dir_forbidden",
-            requested=str(base),
+            requested=str(requested),
             source="env" if override else "default",
         )
         raise BackpropagateError(
             message=(
-                f"BACKPROPAGATE_UI__OUTPUT_DIR resolves to a forbidden system "
-                f"or credential path: {base}"
+                "BACKPROPAGATE_UI__OUTPUT_DIR is a forbidden system or "
+                f"credential path: {requested}"
             ),
             code="UI_OUTPUT_DIR_FORBIDDEN",
             suggestion=(
@@ -474,11 +534,13 @@ def get_ui_output_dir() -> Path:
                 f"following categories are refused: {categories_hint}."
             ),
             details={
-                "requested": str(base),
+                "requested": str(requested),
                 "source": "env" if override else "default",
             },
         )
 
+    # The link walk above returned, so resolve cannot follow a link below home.
+    base = requested.resolve()
     base.mkdir(parents=True, exist_ok=True)
     return base
 
@@ -518,7 +580,7 @@ class SecurityConfig:
         ".exe", ".bat", ".cmd", ".ps1", ".sh", ".py", ".js", ".html", ".htm",
         ".php", ".asp", ".aspx", ".jsp", ".cgi", ".pl", ".rb", ".svg"
     })
-    validate_file_magic: bool = False  # Validate file content matches extension
+    validate_file_magic: bool = True  # Sniff content; the env var can turn this off
 
     # CSRF protection
     csrf_enabled: bool = True
@@ -867,9 +929,9 @@ class FileValidator:
                 return False, f"File too large ({actual_mb:.1f}MB). Maximum: {max_mb:.0f}MB", None
 
         # FB-010: Magic-bytes validation — wire the config flag end-to-end.
-        # When BACKPROPAGATE_SECURITY__VALIDATE_FILE_MAGIC=true (or the
-        # SecurityConfig is constructed with validate_file_magic=True), every
-        # accepted-extension upload is also content-sniffed. This catches the
+        # Content sniffing is on by default (``validate_file_magic=True``).
+        # ``BACKPROPAGATE_SECURITY__VALIDATE_FILE_MAGIC=false`` turns it off.
+        # Every accepted-extension upload is content-sniffed. This catches the
         # "rename .html → .jsonl" extension-spoof case (CVE-2024-47872
         # family). For extensions with no
         # canonical signature (.csv/.txt/.safetensors), validate_file_magic
@@ -1943,7 +2005,7 @@ class RateLimitInfo:
 # Common file signatures (magic bytes)
 FILE_SIGNATURES: dict[str, list[bytes]] = {
     ".json": [b"{", b"["],  # JSON starts with { or [
-    ".jsonl": [b"{"],  # JSONL lines start with {
+    ".jsonl": [b"{", b'"'],  # an object, or a JSON string (plain-text examples)
     ".csv": [],  # CSV has no standard signature
     ".txt": [],  # Plain text has no signature
     ".parquet": [b"PAR1"],  # Parquet magic bytes
@@ -2954,17 +3016,63 @@ _PATH_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
+def _home_folder_prefixes() -> list[str]:
+    """Absolute home folders to strip, including one that is not under /Users.
+
+    The patterns above know ``/home``, ``/Users``, ``/root`` and a Windows
+    profile. A home that lives somewhere else (a portable profile, a test
+    sandbox) would otherwise reach the browser intact. A drive root is not
+    a home and is not used as a prefix.
+    """
+    try:
+        home = Path.home()
+    except (OSError, RuntimeError):
+        return []
+    candidates = [home]
+    try:
+        resolved = home.resolve()
+    except OSError:
+        resolved = None
+    if resolved is not None and resolved != home:
+        candidates.append(resolved)
+    prefixes: list[str] = []
+    for candidate in candidates:
+        text = os.fspath(candidate)
+        if not Path(text).is_absolute():
+            continue
+        parts = [part for part in re.split(r"[\\/]+", text) if part]
+        # A drive root ("C:\") or "/" would swallow every absolute path.
+        if len(parts) < 2:
+            continue
+        if text not in prefixes:
+            prefixes.append(text)
+    return prefixes
+
+
+def _redact_one_home(text: str, prefix: str) -> str:
+    """Replace ``prefix`` and the rest of that path token."""
+    parts = [part for part in re.split(r"[\\/]+", prefix) if part]
+    body = r"[\\/]+".join(re.escape(part) for part in parts)
+    flags = re.IGNORECASE if os.name == "nt" else 0
+    pattern = re.compile(body + r"(?:[\\/]+[^\s'\":]*)?", flags)
+    return pattern.sub(_REDACTED, text)
+
+
 def _redact_paths(text: str) -> str:
     """
     Replace absolute filesystem paths with ``<redacted-path>`` for UI display.
 
     Used by ``sanitize_error_for_user`` so trainer / transformers errors that
-    embed the operator's home directory don't leak into the UI toast.
+    embed the operator's home directory don't leak into the UI toast. The
+    operator's home folder is stripped even when it is not under ``/home``
+    or ``Users``.
     """
     if not text:
         return text
     for pat in _PATH_REDACTION_PATTERNS:
         text = pat.sub(_REDACTED, text)
+    for prefix in _home_folder_prefixes():
+        text = _redact_one_home(text, prefix)
     return text
 
 

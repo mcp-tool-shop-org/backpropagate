@@ -166,24 +166,45 @@ class TestValidateTokenFilePath:
         cleaned, err = us._validate_token_file_path("tok\x00en")
         assert cleaned == "" and "NUL byte" in err
 
-    def test_existing_regular_file_is_resolved(self, tmp_path):
-        f = tmp_path / "hf-token"
+    def test_existing_regular_file_inside_backpropagate_is_resolved(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        (home / ".backpropagate").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        f = home / ".backpropagate" / "hf-token"
         f.write_text("hf_x" * 10, encoding="utf-8")
         cleaned, err = us._validate_token_file_path(f"  {f}  ")
         assert err == "" and Path(cleaned) == f.resolve()
+        assert str(f.resolve()) not in err
 
-    def test_missing_file_names_the_fix(self, tmp_path):
-        cleaned, err = us._validate_token_file_path(str(tmp_path / "nope"))
-        assert cleaned == "" and "does not exist" in err and "printf" in err
+    def test_missing_or_outside_file_is_a_pathless_refusal(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        missing = home / ".backpropagate" / "nope"
+        cleaned, err = us._validate_token_file_path(str(missing))
+        assert cleaned == "" and err == us._TOKEN_FILE_REFUSAL
+        assert str(missing) not in err
+        outside = tmp_path / "nope"
+        outside.write_text("x", encoding="utf-8")
+        cleaned, err = us._validate_token_file_path(str(outside))
+        assert cleaned == "" and str(outside.resolve()) not in err
 
-    def test_directory_is_refused(self, tmp_path):
-        cleaned, err = us._validate_token_file_path(str(tmp_path))
-        assert cleaned == "" and "not a regular file" in err
+    def test_directory_is_refused_without_its_path(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        folder = home / ".backpropagate" / "not-a-file"
+        folder.mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        cleaned, err = us._validate_token_file_path(str(folder))
+        assert cleaned == "" and err == us._TOKEN_FILE_REFUSAL
+        assert str(folder) not in err
 
-    def test_resolve_failure_falls_back_to_unresolved_path(self, tmp_path, monkeypatch):
+    def test_resolve_failure_is_a_pathless_refusal(self, tmp_path, monkeypatch):
         """Mocked: ``Path.resolve`` raises ``RuntimeError`` (symlink loop)."""
-        f = tmp_path / "tok"
+        home = tmp_path / "home"
+        f = home / ".backpropagate" / "tok"
+        f.parent.mkdir(parents=True)
         f.write_text("x", encoding="utf-8")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
         real = Path.resolve
 
         def boom(self, *a, **k):
@@ -193,13 +214,24 @@ class TestValidateTokenFilePath:
 
         monkeypatch.setattr(Path, "resolve", boom)
         cleaned, err = us._validate_token_file_path(str(f))
-        assert err == "" and cleaned == str(f)
+        assert cleaned == "" and err == us._TOKEN_FILE_REFUSAL
+        assert str(f) not in err
 
-    def test_stat_failure_is_reported_as_invalid(self, tmp_path, monkeypatch):
-        """Mocked: ``Path.exists`` raises ``OSError`` (permission / stale handle)."""
-        monkeypatch.setattr(Path, "exists", lambda self: (_ for _ in ()).throw(OSError("denied")))
-        cleaned, err = us._validate_token_file_path(str(tmp_path / "x"))
-        assert cleaned == "" and err.startswith("Invalid token-file path:")
+    def test_stat_failure_is_a_pathless_refusal(self, tmp_path, monkeypatch):
+        """Mocked: ``Path.is_file`` raises ``OSError``."""
+        home = tmp_path / "home"
+        f = home / ".backpropagate" / "x"
+        f.parent.mkdir(parents=True)
+        f.write_text("x", encoding="utf-8")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+        def boom(self):
+            raise OSError("denied")
+
+        monkeypatch.setattr(Path, "is_file", boom)
+        cleaned, err = us._validate_token_file_path(str(f))
+        assert cleaned == "" and err == us._TOKEN_FILE_REFUSAL
+        assert "denied" not in err
 
 
 class TestRedactAction:
@@ -781,14 +813,29 @@ class TestExportHubFieldValidation:
         public = {k: str(getattr(s, k)) for k in s.get_fields() if not k.startswith("_")}
         assert all(secret not in v for v in public.values())
 
-    def test_token_file_path_setter(self, tmp_path):
+    def test_token_file_path_setter(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        (home / ".backpropagate").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
         s = us.ExportState()
-        f = tmp_path / "hf-token"
+        f = home / ".backpropagate" / "hf-token"
         f.write_text("hf_" + "a" * 37, encoding="utf-8")
         s.set_hub_token_file_path(str(f))
-        assert Path(s.hub_token_file_path) == f.resolve() and s.hub_token_file_path_error == ""
-        s.set_hub_token_file_path(str(tmp_path / "missing"))
-        assert s.hub_token_file_path == "" and "does not exist" in s.hub_token_file_path_error
+        assert s.hub_token_file_path == "hf-token" and s.hub_token_file_path_error == ""
+        assert s._hub_token_file_path == str(f.resolve())
+        public = {k: str(getattr(s, k)) for k in s.get_fields() if not k.startswith("_")}
+        assert all(str(f.resolve()) not in v for v in public.values())
+        outside = tmp_path / "elsewhere" / "hf-token"
+        outside.parent.mkdir()
+        outside.write_text("hf_" + "b" * 37, encoding="utf-8")
+        s.set_hub_token_file_path(str(outside))
+        assert s.hub_token_file_path == "" and s._hub_token_file_path == ""
+        assert str(outside.resolve()) not in s.hub_token_file_path_error
+        s.set_hub_token_file_path(str(home / ".backpropagate" / "missing"))
+        assert s.hub_token_file_path == "" and ".backpropagate" in s.hub_token_file_path_error
+        assert str(home) not in s.hub_token_file_path_error
         s.set_hub_token_file_path("  ")
         assert (s.hub_token_file_path, s.hub_token_file_path_error) == ("", "")
 
@@ -846,9 +893,10 @@ class TestPushToHubPreflight:
         assert s.hub_status == "error" and "API token" in s.hub_message
         assert push_recorder.calls == []
 
-    def test_inline_token_and_token_file_are_mutually_exclusive(self, sandbox, tmp_path, push_recorder):
+    def test_inline_token_and_token_file_are_mutually_exclusive(self, sandbox, push_recorder):
         s = _ready_export_state(sandbox)
-        f = tmp_path / "tok"
+        f = sandbox.home / ".backpropagate" / "tok"
+        f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text("hf_" + "z" * 37, encoding="utf-8")
         s.set_hub_token_file_path(str(f))
         s.push_to_hub()
@@ -893,8 +941,9 @@ class TestPushToHubExecution:
         assert s._hub_token_value() == "" and s.hub_token_set is False
         assert "a" * 37 not in s.hub_message
 
-    def test_token_file_push_reads_the_file_at_push_time(self, sandbox, tmp_path, push_recorder):
-        f = tmp_path / "hf-token"
+    def test_token_file_push_reads_the_file_at_push_time(self, sandbox, push_recorder):
+        f = sandbox.home / ".backpropagate" / "hf-token"
+        f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text("hf_" + "f" * 37 + "\n", encoding="utf-8")
         s = _ready_export_state(sandbox)
         s.set_hub_token("")
@@ -905,9 +954,10 @@ class TestPushToHubExecution:
         assert s.hub_token_file_path  # path kept so a retry needs no re-entry
 
     def test_empty_token_file_surfaces_a_sanitised_error_without_pushing(
-        self, sandbox, tmp_path, push_recorder
+        self, sandbox, push_recorder
     ):
-        f = tmp_path / "empty"
+        f = sandbox.home / ".backpropagate" / "empty"
+        f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text("", encoding="utf-8")
         s = _ready_export_state(sandbox)
         s.set_hub_token("")

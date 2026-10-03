@@ -403,7 +403,7 @@ def _validate_run_id(value: str) -> tuple[str, str]:
 # The full path stays in ``_hub_token_file_path``. The public field is the
 # file name.
 _TOKEN_FILE_REFUSAL = (
-    "Token file must be an existing file inside the .backpropagate folder."
+    "Token file must be an existing file inside the .backpropagate folder."  # nosec B105 - a refusal shown to the user, not a credential
 )
 
 

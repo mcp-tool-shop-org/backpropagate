@@ -171,7 +171,7 @@ def test_ws_scope_has_required_asgi_fields():
 # 127.0.0.1 (not "testserver") because the middleware's DNS-rebinding
 # defense rejects anything not in {localhost, 127.0.0.1, ::1, +overrides}.
 _LOOPBACK_BASE_URL = "http://127.0.0.1:7860"
-_LOOPBACK_ORIGIN = "http://127.0.0.1"
+_LOOPBACK_ORIGIN = "http://127.0.0.1:7862"
 
 
 @pytest.fixture
@@ -715,7 +715,7 @@ async def test_post_accept_dos_vector_absent(basic_mode_middleware):
         scope = make_ws_scope(
             path="/_event",
             host="127.0.0.1:7860",
-            origin="http://127.0.0.1:7860",
+            origin="http://127.0.0.1:7862",
             cookies={"backprop_sess": f"garbage-{i}"},
         )
         recorder = WSMessageRecorder()

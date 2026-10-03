@@ -112,7 +112,7 @@ _FUZZ_SETTINGS = settings(
 
 
 _LOOPBACK_BASE_URL = "http://127.0.0.1:7860"
-_LOOPBACK_ORIGIN = "http://127.0.0.1"
+_LOOPBACK_ORIGIN = "http://127.0.0.1:7862"
 
 # Acceptable HTTP status codes for an UNAUTHENTICATED / MALFORMED request.
 # 200 in this list would mean the middleware authenticated garbage — the
@@ -504,13 +504,15 @@ async def test_fuzz_ws_origin_header_does_not_bypass_cswsh_defense(
     This property fuzzes the Origin parser to ensure no Origin string finds
     a code path that lets it through to websocket.accept().
     """
-    # The allowlist is {http,https}://{localhost,127.0.0.1}; anything else
-    # must close 4403 (or 4401 if origin gate fires after auth gate).
+    # The allowlist is scheme + loopback host + the UI listen port. Anything
+    # else must close 4403 (or 4401 when the cookie gate fires after a match).
     is_loopback_origin = origin_value.lower() in {
-        "http://localhost",
-        "http://127.0.0.1",
-        "https://localhost",
-        "https://127.0.0.1",
+        "http://localhost:7862",
+        "http://127.0.0.1:7862",
+        "https://localhost:7862",
+        "https://127.0.0.1:7862",
+        "http://[::1]:7862",
+        "https://[::1]:7862",
     }
     scope = make_ws_scope(
         path="/_event",

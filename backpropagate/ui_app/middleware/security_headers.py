@@ -45,9 +45,8 @@ Rationale for "AFTER auth, BEFORE network":
 Pass-through paths:
 
 - ``/healthz`` — never reached; the healthz middleware wraps OUTSIDE this
-  one and short-circuits before delegation. The /healthz JSON is
-  intentionally NOT hardened (it's a single-purpose orchestrator probe
-  with no JavaScript surface).
+  one and short-circuits before delegation. That middleware stamps
+  ``X-Content-Type-Options`` and ``X-Frame-Options`` on the probe itself.
 - WebSocket upgrades — CSP doesn't apply to WS frames. We pass through
   unmodified.
 - Lifespan events — no response shape to mutate; pass through.
@@ -143,9 +142,8 @@ def security_headers_middleware(asgi_app: Callable) -> Callable:
     appends our canonical set. Non-HTTP scopes (WebSocket, lifespan) and
     non-start messages pass through unchanged.
 
-    The ``healthz_middleware`` short-circuits OUTSIDE this wrap, so the
-    /healthz JSON probe is intentionally NOT hardened (it's a single-
-    purpose orchestrator probe with no script surface).
+    The ``healthz_middleware`` short-circuits OUTSIDE this wrap and stamps
+    nosniff plus the frame header on the probe itself.
     """
 
     async def middleware(scope: dict, receive: Callable, send: Callable) -> None:

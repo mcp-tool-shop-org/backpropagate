@@ -3,8 +3,8 @@
 Wave 6b (v1.3) introduces three sibling middlewares to ``ui_app/auth.py``:
 
 - ``healthz_middleware``     — early-exit for the orchestrator probe (returns
-  JSON outside the auth/rate-limit/CSP-hardened envelope so probes don't
-  need credentials and don't get a script-bearing response).
+  ``{"status": "ok"}`` without a credential check, after the Host
+  allowlist, and stamps nosniff plus the frame header on that response).
 - ``rate_limit_middleware``  — per-IP sliding-window rate limit (fast-fail
   ``429`` BEFORE auth so brute-force attempts can't exhaust HMAC budget).
 - ``request_logging_middleware`` — structured request log (method, path,
@@ -48,10 +48,12 @@ Default-off knobs:
 
 - ``BACKPROPAGATE_UI_REQUEST_LOG=1``         — turn request logging ON
   (default OFF; Reflex's own logging covers the basics).
-- ``BACKPROPAGATE_UI_RATE_LIMIT_HTTP_PER_MIN`` — override HTTP cap
-  (default 100 req/min per IP).
-- ``BACKPROPAGATE_UI_RATE_LIMIT_WS_PER_MIN``   — override WS-upgrade cap
-  (default 10 upgrades/min per IP).
+- ``BACKPROPAGATE_UI_RATE_LIMIT_HTTP_PER_MIN`` — override the rejection cap
+  (default 100 rejected requests/min per IP).
+- ``BACKPROPAGATE_UI_RATE_LIMIT_WS_PER_MIN``   — override the WebSocket
+  rejection cap (default 10 rejected upgrades/min per IP).
+- ``BACKPROPAGATE_UI_RATE_LIMIT_UPLOAD_PER_MIN`` — override the
+  ``POST /_upload`` cap (default 30 posts/min per IP).
 
 Set the HTTP / WS knobs to ``0`` to fully DISABLE rate-limiting (smoke
 tests, local-only operator use). Any positive integer is the per-minute

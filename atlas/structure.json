@@ -137,7 +137,7 @@
       "dynamicReads": 14,
       "dynamicSpawns": 0,
       "dynamicSpawnsInTests": 0,
-      "dynamicWrites": 11,
+      "dynamicWrites": 10,
       "entryPoints": [
         "backpropagate/cli.py"
       ],
@@ -10403,6 +10403,20 @@
           "path": "backpropagate/ui_app/__init__.py"
         },
         {
+          "exports": [
+            "install_access_query_filter"
+          ],
+          "failurePaths": [
+            {
+              "in": "filter",
+              "kind": "except",
+              "line": 47
+            }
+          ],
+          "hash": "2f83dcd7cdd5ed7e669ac41a74d587eae19fdb6be19e1fa03452dcd3138b8830",
+          "path": "backpropagate/ui_app/access_log.py"
+        },
+        {
           "failurePaths": [
             {
               "kind": "except",
@@ -10414,13 +10428,14 @@
             },
             {
               "kind": "raise",
-              "line": 94
+              "line": 100
             }
           ],
-          "hash": "dab5a99a79ba60ae419b97ad142182400207671cf5283aa07c8c640eb7796d5a",
+          "hash": "0292c82e28283a2a58ba794aee205b40e132fc36674600acf2a6c0bf576c8905",
           "importOrder": [
             "backpropagate/ui_theme.py",
             "backpropagate/ui_app/auth.py",
+            "backpropagate/ui_app/access_log.py",
             "backpropagate/ui_app/middleware/__init__.py",
             "backpropagate/ui_app/pages/dataset.py",
             "backpropagate/ui_app/pages/export.py",
@@ -10431,6 +10446,7 @@
             "backpropagate/ui_app/pages/train.py"
           ],
           "importsFiles": [
+            "backpropagate/ui_app/access_log.py",
             "backpropagate/ui_app/auth.py",
             "backpropagate/ui_app/middleware/__init__.py",
             "backpropagate/ui_app/pages/dataset.py",
@@ -10452,36 +10468,41 @@
             {
               "in": "_verify_basic_auth",
               "kind": "except",
-              "line": 299
+              "line": 306
             },
             {
               "in": "_validate_cookie",
               "kind": "except",
-              "line": 350
+              "line": 357
             },
             {
               "in": "_validate_cookie",
               "kind": "except",
-              "line": 355
+              "line": 362
             },
             {
               "in": "_origin_matches_allowlist",
               "kind": "except",
-              "line": 447
+              "line": 478
             },
             {
               "in": "_header_value",
               "kind": "except",
-              "line": 514
+              "line": 545
             },
             {
               "in": "_hardened_header_pairs",
               "kind": "except",
-              "line": 546
+              "line": 577
             }
           ],
-          "hash": "350a175f603ccbd6b97a643dbecc704138a60599b1962fe08ba766d08f272724",
+          "hash": "eaf6efab1d1fbbe5a7416a76285c0b8ad6984b218be0ada4be3db4c82e7e7f6b",
+          "importOrder": [
+            "backpropagate/ui_security.py",
+            "backpropagate/ui_app/access_log.py"
+          ],
           "importsFiles": [
+            "backpropagate/ui_app/access_log.py",
             "backpropagate/ui_security.py"
           ],
           "path": "backpropagate/ui_app/auth.py"
@@ -10704,7 +10725,7 @@
           "path": "backpropagate/ui_app/help_text.py"
         },
         {
-          "hash": "b0529f4b2948fcdf510cac857e2e0f64107323fc21ffa1eba612760de4678690",
+          "hash": "7e4d3772e5f89e3c7f2894236f029c65e977e145bb0204a305d76c92a0479063",
           "importsFiles": [
             "backpropagate/ui_app/middleware/healthz.py",
             "backpropagate/ui_app/middleware/rate_limit.py",
@@ -10719,23 +10740,13 @@
           ],
           "failurePaths": [
             {
-              "in": "_health_payload",
+              "in": "_health_security_headers",
               "kind": "except",
-              "line": 56
-            },
-            {
-              "in": "_health_payload",
-              "kind": "except",
-              "line": 62
+              "line": 53
             }
           ],
-          "hash": "0018fb40e4741d778d4c545375ba2e449a8ef1e2e50305d5e1fd98d9485293e3",
-          "importOrder": [
-            "backpropagate/ui_app/auth.py",
-            "backpropagate/__init__.py"
-          ],
+          "hash": "d3b7e05aeb3d1005f28a24d65f0c806a0ea4a98f145591ca80a1ca2e5941337d",
           "importsFiles": [
-            "backpropagate/__init__.py",
             "backpropagate/ui_app/auth.py"
           ],
           "path": "backpropagate/ui_app/middleware/healthz.py"
@@ -10748,15 +10759,23 @@
             {
               "in": "_resolve_cap",
               "kind": "except",
-              "line": 92
+              "line": 101
             },
             {
               "in": "_client_addr",
               "kind": "except",
-              "line": 216
+              "line": 227
+            },
+            {
+              "in": "_rejection_security_headers",
+              "kind": "except",
+              "line": 268
             }
           ],
-          "hash": "0b4e6daed8b5836dfbc62c03c8d7fb397570b54fab57bea4f8526c3f22ff170a",
+          "hash": "e5ff6a6e76d678df69cd120b9c25f7e15e68c2f2ff70fa65c05310b4b5f12a1d",
+          "importsFiles": [
+            "backpropagate/ui_app/auth.py"
+          ],
           "path": "backpropagate/ui_app/middleware/rate_limit.py"
         },
         {
@@ -10805,10 +10824,10 @@
             {
               "in": "wrapped_send",
               "kind": "except",
-              "line": 187
+              "line": 185
             }
           ],
-          "hash": "4e63198a1663df07758305cc6086c9d37f71a531cbf0600ede92740d5d21cc52",
+          "hash": "3760b3ec17c2430caab3b6f3d4cd985831ded0b098e17662f4c50cf8d53fbd5d",
           "importsFiles": [
             "backpropagate/ui_security.py"
           ],
@@ -11583,49 +11602,49 @@
               "line": 278
             },
             {
-              "in": "_is_forbidden_output_base",
+              "in": "_path_is_junction",
               "kind": "except",
-              "line": 326
+              "line": 302
+            },
+            {
+              "in": "_path_is_junction",
+              "kind": "except",
+              "line": 304
+            },
+            {
+              "in": "_path_is_junction",
+              "kind": "except",
+              "line": 310
+            },
+            {
+              "in": "_path_is_junction",
+              "kind": "except",
+              "line": 312
+            },
+            {
+              "in": "_reparse_point",
+              "kind": "except",
+              "line": 327
+            },
+            {
+              "in": "_reparse_point",
+              "kind": "except",
+              "line": 329
+            },
+            {
+              "in": "_is_symlink_or_junction",
+              "kind": "except",
+              "line": 345
             },
             {
               "in": "_is_forbidden_output_base",
               "kind": "except",
-              "line": 332
+              "line": 387
             },
             {
               "in": "_is_forbidden_output_base",
               "kind": "except",
-              "line": 343
-            },
-            {
-              "in": "_is_forbidden_output_base",
-              "kind": "except",
-              "line": 355
-            },
-            {
-              "in": "_is_forbidden_output_base",
-              "kind": "except",
-              "line": 367
-            },
-            {
-              "in": "_is_forbidden_output_base",
-              "kind": "except",
-              "line": 379
-            },
-            {
-              "in": "_is_forbidden_output_base",
-              "kind": "except",
-              "line": 385
-            },
-            {
-              "in": "_is_forbidden_output_base",
-              "kind": "except",
-              "line": 398
-            },
-            {
-              "in": "_is_forbidden_output_base",
-              "kind": "except",
-              "line": 401
+              "line": 396
             },
             {
               "in": "_is_forbidden_output_base",
@@ -11633,161 +11652,206 @@
               "line": 408
             },
             {
+              "in": "_is_forbidden_output_base",
+              "kind": "except",
+              "line": 422
+            },
+            {
+              "in": "_is_forbidden_output_base",
+              "kind": "except",
+              "line": 434
+            },
+            {
+              "in": "_is_forbidden_output_base",
+              "kind": "except",
+              "line": 440
+            },
+            {
+              "in": "_is_forbidden_output_base",
+              "kind": "except",
+              "line": 453
+            },
+            {
+              "in": "_is_forbidden_output_base",
+              "kind": "except",
+              "line": 456
+            },
+            {
+              "in": "_is_forbidden_output_base",
+              "kind": "except",
+              "line": 463
+            },
+            {
               "in": "get_ui_output_dir",
               "kind": "raise",
-              "line": 465
+              "line": 525
             },
             {
               "in": "load_config_from_env",
               "kind": "except",
-              "line": 590
+              "line": 652
             },
             {
               "in": "require",
               "kind": "raise",
-              "line": 785
+              "line": 847
             },
             {
               "in": "validate",
               "kind": "except",
-              "line": 840
+              "line": 902
             },
             {
               "in": "validate_numeric_input",
               "kind": "raise",
-              "line": 976
-            },
-            {
-              "in": "validate_numeric_input",
-              "kind": "except",
-              "line": 980
-            },
-            {
-              "in": "validate_numeric_input",
-              "kind": "raise",
-              "line": 983
+              "line": 1038
             },
             {
               "in": "validate_numeric_input",
               "kind": "except",
-              "line": 984
+              "line": 1042
             },
             {
               "in": "validate_numeric_input",
               "kind": "raise",
-              "line": 985
+              "line": 1045
+            },
+            {
+              "in": "validate_numeric_input",
+              "kind": "except",
+              "line": 1046
             },
             {
               "in": "validate_numeric_input",
               "kind": "raise",
-              "line": 992
+              "line": 1047
             },
             {
               "in": "validate_numeric_input",
               "kind": "raise",
-              "line": 995
+              "line": 1054
             },
             {
               "in": "validate_numeric_input",
               "kind": "raise",
-              "line": 998
+              "line": 1057
+            },
+            {
+              "in": "validate_numeric_input",
+              "kind": "raise",
+              "line": 1060
             },
             {
               "in": "validate_string_input",
               "kind": "raise",
-              "line": 1035
+              "line": 1097
             },
             {
               "in": "validate_string_input",
               "kind": "raise",
-              "line": 1044
+              "line": 1106
             },
             {
               "in": "validate_string_input",
               "kind": "raise",
-              "line": 1049
+              "line": 1111
             },
             {
               "in": "validate_string_input",
               "kind": "raise",
-              "line": 1052
+              "line": 1114
             },
             {
               "in": "validate_string_input",
               "kind": "raise",
-              "line": 1059
+              "line": 1121
             },
             {
               "in": "_is_localhost",
               "kind": "except",
-              "line": 1208
+              "line": 1270
             },
             {
               "in": "get_health_status",
               "kind": "except",
-              "line": 1299
+              "line": 1361
             },
             {
               "in": "get_health_status",
               "kind": "except",
-              "line": 1326
+              "line": 1388
             },
             {
               "in": "validate_file_magic",
               "kind": "except",
-              "line": 2014
+              "line": 2076
             },
             {
               "kind": "except",
-              "line": 2074
+              "line": 2136
             },
             {
               "in": "create_token",
               "kind": "raise",
-              "line": 2141
+              "line": 2203
             },
             {
               "in": "verify_token",
               "kind": "except",
-              "line": 2210
+              "line": 2272
             },
             {
               "in": "verify_token",
               "kind": "except",
-              "line": 2214
+              "line": 2276
+            },
+            {
+              "in": "_ui_listen_port",
+              "kind": "except",
+              "line": 2870
+            },
+            {
+              "in": "_home_folder_prefixes",
+              "kind": "except",
+              "line": 3076
+            },
+            {
+              "in": "_home_folder_prefixes",
+              "kind": "except",
+              "line": 3081
             },
             {
               "in": "validate_auth_shape",
               "kind": "raise",
-              "line": 3069
+              "line": 3224
             },
             {
               "in": "validate_auth_shape",
               "kind": "raise",
-              "line": 3079
+              "line": 3234
             },
             {
               "in": "validate_auth_shape",
               "kind": "raise",
-              "line": 3087
+              "line": 3242
             },
             {
               "in": "validate_auth_shape",
               "kind": "raise",
-              "line": 3098
+              "line": 3253
             },
             {
               "in": "_parse_verifier",
               "kind": "except",
-              "line": 3195
+              "line": 3350
             },
             {
               "in": "verify_password",
               "kind": "except",
-              "line": 3222
+              "line": 3377
             }
           ],
-          "hash": "19bb2e8a8cb57186fd3246c50ae0ad61402e5418d70a533ba1877d86c060ea14",
+          "hash": "24912854843425c2fa5d373e52989e07c0ac247fc0ef06072f3db79b4cc04849",
           "importOrder": [
             "backpropagate/exceptions.py",
             "backpropagate/__init__.py",
@@ -11803,7 +11867,31 @@
             {
               "calls": [
                 {
-                  "line": 325,
+                  "line": 343,
+                  "name": "is_symlink",
+                  "target": null
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_is_symlink_or_junction"
+            },
+            {
+              "calls": [
+                {
+                  "line": 395,
+                  "name": "expanduser",
+                  "target": null
+                },
+                {
+                  "line": 343,
+                  "name": "is_symlink",
+                  "target": null,
+                  "via": "_is_symlink_or_junction"
+                },
+                {
+                  "line": 421,
                   "name": "expanduser",
                   "target": null
                 }
@@ -11816,14 +11904,26 @@
             {
               "calls": [
                 {
-                  "line": 325,
+                  "line": 395,
                   "name": "expanduser",
                   "target": null,
                   "via": "_is_forbidden_output_base"
                 },
                 {
-                  "branch": "_is_forbidden_output_base(base)",
-                  "line": 465,
+                  "line": 343,
+                  "name": "is_symlink",
+                  "target": null,
+                  "via": "_is_symlink_or_junction"
+                },
+                {
+                  "line": 421,
+                  "name": "expanduser",
+                  "target": null,
+                  "via": "_is_forbidden_output_base"
+                },
+                {
+                  "branch": "_is_forbidden_output_base(requested)",
+                  "line": 525,
                   "name": "BackpropagateError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -11839,14 +11939,14 @@
               "calls": [
                 {
                   "branch": "value is None",
-                  "line": 976,
+                  "line": 1038,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 983,
+                  "line": 1045,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -11854,7 +11954,7 @@
                 },
                 {
                   "branch": "not math.isfinite(num)",
-                  "line": 992,
+                  "line": 1054,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -11862,7 +11962,7 @@
                 },
                 {
                   "branch": "min_value is not None and num < min_value",
-                  "line": 995,
+                  "line": 1057,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -11870,7 +11970,7 @@
                 },
                 {
                   "branch": "max_value is not None and num > max_value",
-                  "line": 998,
+                  "line": 1060,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -11886,7 +11986,7 @@
               "calls": [
                 {
                   "branch": "value is None",
-                  "line": 1035,
+                  "line": 1097,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -11894,7 +11994,7 @@
                 },
                 {
                   "branch": "len(text) > max_length",
-                  "line": 1044,
+                  "line": 1106,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -11902,7 +12002,7 @@
                 },
                 {
                   "branch": "not allow_empty and len(text.strip()) == 0",
-                  "line": 1049,
+                  "line": 1111,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -11910,7 +12010,7 @@
                 },
                 {
                   "branch": "len(text) < min_length",
-                  "line": 1052,
+                  "line": 1114,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -11918,7 +12018,7 @@
                 },
                 {
                   "branch": "not re.match(pattern, text)",
-                  "line": 1059,
+                  "line": 1121,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -11933,7 +12033,7 @@
             {
               "calls": [
                 {
-                  "line": 1306,
+                  "line": 1368,
                   "name": "__version__",
                   "passed": true,
                   "target": {
@@ -11941,7 +12041,7 @@
                   }
                 },
                 {
-                  "line": 1315,
+                  "line": 1377,
                   "name": "get_gpu_status",
                   "target": {
                     "file": "backpropagate/gpu_safety.py"
@@ -11956,7 +12056,7 @@
             {
               "calls": [
                 {
-                  "line": 2002,
+                  "line": 2064,
                   "name": "exists",
                   "target": null
                 }
@@ -11969,12 +12069,12 @@
             {
               "calls": [
                 {
-                  "line": 2853,
+                  "line": 2962,
                   "name": "get_all_security_headers",
                   "target": null
                 },
                 {
-                  "line": 2860,
+                  "line": 2969,
                   "name": "set_header",
                   "target": null
                 }
@@ -11987,7 +12087,7 @@
             {
               "calls": [
                 {
-                  "line": 2886,
+                  "line": 2995,
                   "name": "get_all_security_headers",
                   "target": null
                 }
@@ -12000,7 +12100,7 @@
             {
               "calls": [
                 {
-                  "line": 2997,
+                  "line": 3152,
                   "name": "BackpropagateError",
                   "passed": true,
                   "target": {
@@ -12017,7 +12117,7 @@
               "calls": [
                 {
                   "branch": "not _is_credential_pair(auth)",
-                  "line": 3069,
+                  "line": 3224,
                   "name": "BackpropagateError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -12025,7 +12125,7 @@
                 },
                 {
                   "branch": "not auth",
-                  "line": 3079,
+                  "line": 3234,
                   "name": "BackpropagateError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -12033,7 +12133,7 @@
                 },
                 {
                   "branch": "not _is_credential_pair(entry)",
-                  "line": 3087,
+                  "line": 3242,
                   "name": "BackpropagateError",
                   "over": "enumerate(auth)",
                   "target": {
@@ -12041,7 +12141,7 @@
                   }
                 },
                 {
-                  "line": 3098,
+                  "line": 3253,
                   "name": "BackpropagateError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -12063,305 +12163,350 @@
             {
               "in": "_merge_job_history_rows",
               "kind": "except",
-              "line": 157
+              "line": 158
             },
             {
               "in": "_job_status_override",
               "kind": "except",
-              "line": 191
+              "line": 192
             },
             {
               "in": "_locate_run_history_dir",
               "kind": "except",
-              "line": 213
+              "line": 214
             },
             {
               "in": "_job_loss_curve",
               "kind": "except",
-              "line": 233
+              "line": 234
             },
             {
               "in": "_job_loss_curve",
               "kind": "except",
-              "line": 238
+              "line": 239
             },
             {
               "in": "_fmt_started",
               "kind": "except",
-              "line": 255
+              "line": 256
             },
             {
               "in": "_validate_ui_path",
               "kind": "except",
-              "line": 341
+              "line": 342
             },
             {
               "in": "_validate_token_file_path",
               "kind": "except",
-              "line": 441
+              "line": 431
             },
             {
               "in": "_validate_token_file_path",
               "kind": "except",
-              "line": 457
+              "line": 440
+            },
+            {
+              "in": "_validate_token_file_path",
+              "kind": "except",
+              "line": 444
+            },
+            {
+              "in": "_validate_token_file_path",
+              "kind": "except",
+              "line": 449
             },
             {
               "in": "_redact_action",
               "kind": "except",
-              "line": 492
+              "line": 484
+            },
+            {
+              "in": "_display_output_path",
+              "kind": "except",
+              "line": 514
+            },
+            {
+              "in": "_display_output_path",
+              "kind": "except",
+              "line": 526
+            },
+            {
+              "in": "_resolves_inside_output",
+              "kind": "except",
+              "line": 539
             },
             {
               "in": "_coerce_int",
               "kind": "except",
-              "line": 516
+              "line": 563
             },
             {
               "in": "_coerce_int",
               "kind": "except",
-              "line": 519
+              "line": 566
             },
             {
               "in": "_coerce_float",
               "kind": "except",
-              "line": 544
+              "line": 591
             },
             {
               "in": "_read_log_tail",
               "kind": "except",
-              "line": 717
+              "line": 764
             },
             {
               "in": "model_preset_options",
               "kind": "except",
-              "line": 825
+              "line": 872
             },
             {
               "in": "refresh_gpu",
               "kind": "except",
-              "line": 1734
+              "line": 1798
             },
             {
               "in": "start_job",
               "kind": "except",
-              "line": 1775
+              "line": 1841
             },
             {
               "in": "_begin_job",
               "kind": "except",
-              "line": 1790
+              "line": 1856
             },
             {
               "in": "_begin_job",
               "kind": "except",
-              "line": 1793
+              "line": 1859
             },
             {
               "in": "_hub_session",
               "kind": "except",
-              "line": 2776
+              "line": 2850
             },
             {
               "in": "push_to_hub",
               "kind": "except",
-              "line": 2925
+              "line": 3017
             },
             {
               "in": "push_to_hub",
               "kind": "except",
-              "line": 2937
+              "line": 3029
+            },
+            {
+              "in": "_exclusive_write",
+              "kind": "except",
+              "line": 3094
+            },
+            {
+              "in": "_exclusive_write",
+              "kind": "except",
+              "line": 3103
+            },
+            {
+              "in": "_exclusive_write",
+              "kind": "except",
+              "line": 3107
+            },
+            {
+              "in": "_exclusive_write",
+              "kind": "raise",
+              "line": 3109
             },
             {
               "in": "handle_upload",
               "kind": "except",
-              "line": 3184
+              "line": 3328
             },
             {
               "in": "handle_upload",
               "kind": "except",
-              "line": 3254
+              "line": 3398
             },
             {
               "in": "handle_upload",
               "kind": "except",
-              "line": 3260
+              "line": 3404
             },
             {
               "in": "handle_upload",
               "kind": "except",
-              "line": 3280
+              "line": 3424
             },
             {
               "in": "handle_upload",
               "kind": "except",
-              "line": 3318
+              "line": 3462
             },
             {
               "in": "_inspect",
               "kind": "except",
-              "line": 3373
+              "line": 3521
             },
             {
               "in": "_inspect",
               "kind": "except",
-              "line": 3377
+              "line": 3525
             },
             {
               "in": "_recount",
               "kind": "except",
-              "line": 3407
+              "line": 3555
             },
             {
               "in": "save_cleaned_copy",
               "kind": "except",
-              "line": 3488
+              "line": 3636
             },
             {
               "in": "save_cleaned_copy",
-              "kind": "except",
-              "line": 3491
-            },
-            {
-              "in": "load_runs",
-              "kind": "except",
-              "line": 3608
-            },
-            {
-              "in": "load_runs",
-              "kind": "except",
-              "line": 3616
-            },
-            {
-              "in": "load_runs",
-              "kind": "except",
-              "line": 3623
-            },
-            {
-              "in": "load_runs",
               "kind": "except",
               "line": 3639
             },
             {
               "in": "load_runs",
               "kind": "except",
-              "line": 3654
+              "line": 3764
             },
             {
               "in": "load_runs",
               "kind": "except",
-              "line": 3660
+              "line": 3772
             },
             {
               "in": "load_runs",
               "kind": "except",
-              "line": 3696
+              "line": 3779
             },
             {
               "in": "load_runs",
               "kind": "except",
-              "line": 3704
+              "line": 3795
+            },
+            {
+              "in": "load_runs",
+              "kind": "except",
+              "line": 3810
+            },
+            {
+              "in": "load_runs",
+              "kind": "except",
+              "line": 3816
+            },
+            {
+              "in": "load_runs",
+              "kind": "except",
+              "line": 3852
+            },
+            {
+              "in": "load_runs",
+              "kind": "except",
+              "line": 3860
             },
             {
               "in": "_load_storage",
               "kind": "except",
-              "line": 3736
+              "line": 3892
             },
             {
               "in": "clean_up_storage",
               "kind": "except",
-              "line": 3765
+              "line": 3921
             },
             {
               "in": "load_run",
               "kind": "except",
-              "line": 4128
+              "line": 4286
             },
             {
               "in": "load_run",
               "kind": "except",
-              "line": 4159
+              "line": 4317
             },
             {
               "in": "load_run",
               "kind": "except",
-              "line": 4170
+              "line": 4328
             },
             {
               "in": "load_run",
               "kind": "except",
-              "line": 4203
+              "line": 4361
             },
             {
               "in": "load_run",
               "kind": "except",
-              "line": 4211
+              "line": 4369
             },
             {
               "in": "load_run",
               "kind": "except",
-              "line": 4255
+              "line": 4425
             },
             {
               "in": "load_run",
               "kind": "except",
-              "line": 4285
+              "line": 4455
             },
             {
               "in": "load_run",
               "kind": "except",
-              "line": 4318
+              "line": 4488
             },
             {
               "in": "diff_against",
               "kind": "except",
-              "line": 4382
+              "line": 4552
             },
             {
               "in": "replay",
               "kind": "except",
-              "line": 4467
+              "line": 4637
             },
             {
               "in": "_resolve_history_dir",
               "kind": "except",
-              "line": 4491
+              "line": 4661
             },
             {
               "in": "delete_run",
               "kind": "except",
-              "line": 4550
+              "line": 4720
             },
             {
               "in": "export_run",
               "kind": "except",
-              "line": 4623
+              "line": 4793
             },
             {
               "in": "_home_relative",
               "kind": "except",
-              "line": 4700
+              "line": 4870
             },
             {
               "in": "load_models",
               "kind": "except",
-              "line": 4789
+              "line": 4959
             },
             {
               "in": "load_models",
               "kind": "except",
-              "line": 4795
+              "line": 4965
             },
             {
               "in": "load_models",
               "kind": "except",
-              "line": 4808
+              "line": 4978
             },
             {
               "in": "delete_model",
               "kind": "except",
-              "line": 4901
+              "line": 5076
             }
           ],
-          "hash": "dd7dd4bde3ced0d87ade0a2ee716bef3b834ed96d80de6601170b0616b130bf5",
+          "hash": "fe20c0e96f0e782c63881f0c477baa927bd0451b8161526fe11a13a144b8fc00",
           "importOrder": [
             "backpropagate/dataset_prep.py",
             "backpropagate/security.py",
@@ -12694,7 +12839,7 @@
       "testRunners": [
         "pytest"
       ],
-      "testedBy": 174,
+      "testedBy": 176,
       "unresolvedNamed": [
         {
           "path": "backpropagate/trainer.py",
@@ -14544,7 +14689,7 @@
           "path": ".trivyignore"
         },
         {
-          "hash": "6db68c819792e1919267fab63f9aff9e7d375b5fdae903ad8ad4fcce1a777863",
+          "hash": "7997ec9acfb66335cc7a90a9faae7ba04b71d63ace4f18cd7c3336bf00c2134f",
           "path": "CHANGELOG.md"
         },
         {
@@ -15821,7 +15966,7 @@
             "test_ws_scope_has_required_asgi_fields",
             "test_ws_tampered_cookie_signature_closes_pre_accept"
           ],
-          "hash": "8a7c598e6b47412c707219f0718f24bd6ecc91ccd389a05f445d8eb5a4bcb238",
+          "hash": "d62e82cc5cb00d65e39b70350cf0e255b4644645f74922b8487d81c648c49dfd",
           "importOrder": [
             "tests/helpers/asgi.py",
             "tests/helpers/ws.py",
@@ -15853,7 +15998,7 @@
             "test_fuzz_ws_origin_header_does_not_bypass_cswsh_defense",
             "test_malformed_basic_b64_never_authenticates"
           ],
-          "hash": "57d157596b2a9911c39f6afdb2e7180418465055f4194cc18c259bcbf853e65f",
+          "hash": "0511aa495189a713d980208bba134c7a63ca650518d7a0c565c739ff3f8c2355",
           "importOrder": [
             "tests/helpers/asgi.py",
             "tests/helpers/ws.py",
@@ -17813,7 +17958,7 @@
           "testFramework": "pytest"
         },
         {
-          "hash": "db74693b98a6dac2f4189a3be9a69914d0f25ba3dd93226c690bc55060bca738",
+          "hash": "6cd1ea324feff95ee9bafa0f2c38c1b44749b2a02aa9a1809e23d6e913fc597a",
           "importOrder": [
             "backpropagate/cli.py",
             "backpropagate/ui_state.py",
@@ -17862,7 +18007,7 @@
           "testFramework": "pytest"
         },
         {
-          "hash": "124e12e9ea98df1ca03cf1250b80fc76bb8c1880ca6d6446e40cd6291227ecc3",
+          "hash": "4f06d64747ecc0ec3b0d23f8aecd8f7f6df3f1e3f8273032e2de206b27513953",
           "importsFiles": [
             "backpropagate/ui_security.py"
           ],
@@ -18253,9 +18398,28 @@
         },
         {
           "exports": [
+            "test_access_filter_failure_still_emits",
+            "test_access_filter_ignores_a_record_without_args",
+            "test_access_filter_install_is_idempotent",
+            "test_access_filter_scrubs_args_and_keeps_format_strings",
+            "test_access_filter_scrubs_bytes_in_a_tuple",
+            "test_access_record_drops_the_query",
+            "test_connect_src_follows_the_listen_port_and_share_host",
+            "test_listen_port_falls_back_on_garbage"
+          ],
+          "hash": "28e1d2aba2e8f830bb8c3284a4659cab4f9d4a26a3db25bd40b949af380d55ec",
+          "importsFiles": [
+            "backpropagate/ui_app/__init__.py",
+            "backpropagate/ui_app/access_log.py",
+            "backpropagate/ui_security.py"
+          ],
+          "path": "tests/test_ui_auth_transport.py"
+        },
+        {
+          "exports": [
             "test_close_codes_are_distinct_application_codes"
           ],
-          "hash": "f96e1d4456cd2b61f2a3a1eba65e689635efd629dee6cd186db7e687347f6654",
+          "hash": "e20d4dc958a9cc2ebc84e0d8e71c58874bcce7678c1ae89e13b8c75278d25c4e",
           "importsFiles": [
             "backpropagate/ui_app/__init__.py",
             "backpropagate/ui_app/auth.py",
@@ -18278,18 +18442,16 @@
           "testFramework": "pytest"
         },
         {
-          "hash": "81bd3adfdd01a467ce1890015ba1b3cf4c402d9a138e09315c3a198243b755aa",
+          "hash": "0f1c65858a582f10f87235a121824e8d30f9e53da93bd437b986fb591d8c9b78",
           "importOrder": [
             "backpropagate/ui_app/middleware/__init__.py",
             "backpropagate/ui_app/middleware/healthz.py",
             "backpropagate/ui_app/middleware/rate_limit.py",
             "backpropagate/ui_app/middleware/request_logging.py",
-            "backpropagate/__init__.py",
             "backpropagate/ui_app/auth.py",
             "backpropagate/logging_config.py"
           ],
           "importsFiles": [
-            "backpropagate/__init__.py",
             "backpropagate/logging_config.py",
             "backpropagate/ui_app/auth.py",
             "backpropagate/ui_app/middleware/__init__.py",
@@ -18353,7 +18515,7 @@
             "test_env_snapshot_is_restored_between_tests",
             "test_module_all_names_exist"
           ],
-          "hash": "24becb5efe332310e61c2e501dca2b86b09d6ad0ba4aaf2c67db6292e79a1006",
+          "hash": "bdbaa522137ef18391e06f5d84c5f7703450492bdf674ee4879ce857a71a2064",
           "importOrder": [
             "backpropagate/__init__.py",
             "backpropagate/ui_security.py",
@@ -18409,7 +18571,7 @@
             "push_recorder",
             "sandbox"
           ],
-          "hash": "0d1003237d00e29920c77548057575a967c706a3cac93276124ea632a550ca2f",
+          "hash": "cbd3608ea971c40dc7f505f3f7effa8184523e585315602d11b14ccef3ed9f9e",
           "importOrder": [
             "backpropagate/__init__.py",
             "backpropagate/ui_state.py",
@@ -18433,7 +18595,7 @@
           "exports": [
             "sandbox"
           ],
-          "hash": "3f17b2de38b9383e801bec67a65c08f57fe5b011c1fce9fdda209551cd428e64",
+          "hash": "5e159bce9b688a1d5336872e74653834b9863f718f725cd888f8d51d277a967e",
           "importOrder": [
             "backpropagate/__init__.py",
             "backpropagate/ui_state.py",
@@ -18491,7 +18653,7 @@
             "test_use_in_single_run_fills_the_form_and_goes_there",
             "test_use_without_an_upload_does_nothing"
           ],
-          "hash": "0460b414869a4b19fdcbea519c3079d0632609b307fa1a835baa76b2198ac691",
+          "hash": "ef72e7140db7b73dba8bd95100e64629b076ab19794069f6938cb1789ef5dba0",
           "importOrder": [
             "backpropagate/dataset_prep.py",
             "backpropagate/ui_state.py",
@@ -18608,7 +18770,7 @@
             "test_setting_again_moves_a_session_to_the_newest_slot",
             "test_the_token_is_not_in_what_reflex_writes_to_disk"
           ],
-          "hash": "9513df293f08d2135de997901f872d8d218812f2fb06f15e14d2f698f505546f",
+          "hash": "890278cb8c2e208e14b708d0dbdc28a2c3f5335b53e92079dcc9479e61f73f1f",
           "importOrder": [
             "backpropagate/__init__.py",
             "backpropagate/ui_state.py",
@@ -18878,7 +19040,29 @@
           "testFramework": "pytest"
         },
         {
-          "hash": "e30383315bd0118080b555dee86552ff59ff504c279a411cd22754eebb12f199",
+          "exports": [
+            "sandbox"
+          ],
+          "hash": "8d3762b6221f12b099e7f3e9f2d8e2fb66692c1d1af33ace020fb89746291357",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/ui_security.py",
+            "backpropagate/ui_state.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/export.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/export.py",
+            "backpropagate/ui_security.py",
+            "backpropagate/ui_state.py"
+          ],
+          "path": "tests/test_ui_sandbox_mediums.py",
+          "testFramework": "pytest"
+        },
+        {
+          "hash": "ae51b449714722d9c34fef55825df5d4f2483fc0e54b1f72fe8d8a221f3e5b37",
           "importOrder": [
             "backpropagate/ui_security.py",
             "backpropagate/exceptions.py"
@@ -18926,7 +19110,7 @@
           "exports": [
             "test_merge_job_history_rows_merges_jobs_tree"
           ],
-          "hash": "71aba5a7748efdeeaf373f687dd4269e843432a5bdaf9e070dc42b1254be5033",
+          "hash": "549510276616d145d4c4ab8a25d8ac10c509be036ed5d481afc0df7670dfaad7",
           "importOrder": [
             "backpropagate/ui_state.py",
             "backpropagate/ui_jobs.py",
@@ -20089,7 +20273,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 67
+          "files": 68
         },
         {
           "boundary": "requirements",
@@ -20109,7 +20293,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 184
+          "files": 186
         },
         {
           "boundary": "fuzz",
@@ -20284,7 +20468,7 @@
       "tests": [
         {
           "config": "pyproject.toml",
-          "files": 184,
+          "files": 186,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests"
@@ -20292,7 +20476,7 @@
         {
           "config": "pyproject.toml",
           "coverage": true,
-          "files": 184,
+          "files": 186,
           "job": "test",
           "junit": true,
           "runner": "pytest",
@@ -20300,28 +20484,28 @@
         },
         {
           "config": "pyproject.toml",
-          "files": 184,
+          "files": 186,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests (Windows/macOS smoke)"
         },
         {
           "config": "pyproject.toml",
-          "files": 184,
+          "files": 186,
           "job": "parallel-xdist",
           "runner": "pytest",
           "step": "Run tests under -n auto --dist worksteal"
         },
         {
           "config": "pyproject.toml",
-          "files": 184,
+          "files": 186,
           "job": "uv-sync-pilot",
           "runner": "pytest",
           "step": "Run pytest (non-gpu / non-slow / non-integration)"
         },
         {
           "config": "pyproject.toml",
-          "files": 184,
+          "files": 186,
           "job": "verify-smoke",
           "runner": "pytest",
           "step": "Run verify.sh --format=json",
@@ -21182,7 +21366,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 27
+          "files": 28
         }
       ],
       "readers": [],
@@ -21468,7 +21652,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 67
+          "files": 68
         },
         {
           "boundary": "requirements",
@@ -21994,7 +22178,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 27
+          "files": 28
         }
       ],
       "readers": [],
@@ -22036,7 +22220,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 27
+          "files": 28
         }
       ],
       "readers": [],
@@ -22096,8 +22280,8 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "5fbeab504ae2837d0b8689b63211598b8287d042",
-    "tracked": 774
+    "commit": "d999f0fc0c64d8fddbdf5ea1646434e16241ced9",
+    "tracked": 777
   },
   "landings": [
     {
@@ -22934,7 +23118,7 @@
   "overlaps": [],
   "submodules": [],
   "symlinks": [],
-  "testFiles": 187,
+  "testFiles": 189,
   "unassigned": [
     {
       "exports": [

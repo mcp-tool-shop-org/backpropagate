@@ -7,20 +7,27 @@ spent on it.
 
 What counts (since 1.8.2): responses the auth layer REJECTS — HTTP 401, 403
 and 421, and WebSocket closes 4401 / 4403 / 4404 sent before accept. Traffic
-from an authenticated browser never counts. Until 1.8.1 every request
-counted, and once ``backprop ui`` served the compiled frontend on its single
-port (1.8.1) a page load's dozens of asset GETs tripped the cap within one
-or two reloads, which rendered the UI with broken icons.
+from an authenticated browser never counts, and accepted ``/_event`` frames
+are not counted. Until 1.8.1 every request counted, and once ``backprop ui``
+served the compiled frontend on its single port (1.8.1) a page load's dozens
+of asset GETs tripped the cap within one or two reloads, which rendered the
+UI with broken icons.
+
+A separate counter caps ``POST /_upload``. That counter includes the post
+itself, not only rejections, so a client cannot stream unbounded uploads
+under the rejection cap. It does not apply to other paths.
 
 Defaults (per remote IP, rolling 60 s):
 
-- HTTP: 100 rejected requests/min
-- WebSocket: 10 rejected upgrades/min
+- HTTP rejections: 100 / min
+- WebSocket rejections: 10 / min
+- Upload posts: 30 / min
 
 Override via env vars:
 
-- ``BACKPROPAGATE_UI_RATE_LIMIT_HTTP_PER_MIN``  — integer; 0 disables
-- ``BACKPROPAGATE_UI_RATE_LIMIT_WS_PER_MIN``    — integer; 0 disables
+- ``BACKPROPAGATE_UI_RATE_LIMIT_HTTP_PER_MIN``    — integer; 0 disables
+- ``BACKPROPAGATE_UI_RATE_LIMIT_WS_PER_MIN``      — integer; 0 disables
+- ``BACKPROPAGATE_UI_RATE_LIMIT_UPLOAD_PER_MIN``  — integer; 0 disables
 
 Implementation: stdlib-only sliding window over ``collections.deque`` of
 event timestamps per IP. Old entries are pruned lazily on each check so the
@@ -60,10 +67,12 @@ logger = logging.getLogger(__name__)
 # they're already older than the window).
 _DEFAULT_HTTP_PER_MIN = 100
 _DEFAULT_WS_PER_MIN = 10
+_DEFAULT_UPLOAD_PER_MIN = 30
 _WINDOW_SECONDS = 60.0
 
 _HTTP_ENV = "BACKPROPAGATE_UI_RATE_LIMIT_HTTP_PER_MIN"
 _WS_ENV = "BACKPROPAGATE_UI_RATE_LIMIT_WS_PER_MIN"
+_UPLOAD_ENV = "BACKPROPAGATE_UI_RATE_LIMIT_UPLOAD_PER_MIN"
 
 # The WS close code for rate-limit rejections. RFC 6455 reserves 4000-4999
 # for application use; 4429 reads as "HTTP 429 equivalent over WS" and is
@@ -184,6 +193,7 @@ class _SlidingWindow:
 # production they live for the lifetime of the Reflex worker process.
 _HTTP_WINDOW = _SlidingWindow()
 _WS_WINDOW = _SlidingWindow()
+_UPLOAD_WINDOW = _SlidingWindow()
 
 # Counter used to throttle the prune-idle-ips sweep (every 100 events).
 _PRUNE_INTERVAL = 100
@@ -200,6 +210,7 @@ def _maybe_prune(now: float) -> None:
     if should_prune:
         _HTTP_WINDOW.prune_idle_ips(now)
         _WS_WINDOW.prune_idle_ips(now)
+        _UPLOAD_WINDOW.prune_idle_ips(now)
 
 
 def _client_addr(scope: dict) -> str:
@@ -237,8 +248,33 @@ def _build_429_response() -> tuple[bytes, list[tuple[bytes, bytes]]]:
         (b"content-length", str(len(body)).encode("ascii")),
         (b"retry-after", str(int(_WINDOW_SECONDS)).encode("ascii")),
         (b"cache-control", b"no-store"),
+        *_rejection_security_headers(),
     ]
     return body, headers
+
+
+def _rejection_security_headers() -> list[tuple[bytes, bytes]]:
+    """nosniff and frame headers for a 429 this middleware sends itself.
+
+    The security-headers wrap sits inside auth, so a 429 returned here never
+    reaches it. Reuse the shared set, and stamp the two required headers
+    when that set is empty or the import fails.
+    """
+    pairs: list[tuple[bytes, bytes]] = []
+    try:
+        from backpropagate.ui_app.auth import _hardened_header_pairs
+
+        pairs = list(_hardened_header_pairs())
+    except Exception as exc:  # noqa: BLE001 — a 429 must still answer
+        logger.debug(
+            "rate_limit: security headers unavailable: %s", type(exc).__name__,
+        )
+    present = {name.lower() for name, _ in pairs}
+    if b"x-content-type-options" not in present:
+        pairs.append((b"x-content-type-options", b"nosniff"))
+    if b"x-frame-options" not in present:
+        pairs.append((b"x-frame-options", b"SAMEORIGIN"))
+    return pairs
 
 
 def rate_limit_middleware(asgi_app: Callable) -> Callable:
@@ -269,9 +305,10 @@ def rate_limit_middleware(asgi_app: Callable) -> Callable:
         env = dict(os.environ)
         http_cap = _resolve_cap(_HTTP_ENV, _DEFAULT_HTTP_PER_MIN, env)
         ws_cap = _resolve_cap(_WS_ENV, _DEFAULT_WS_PER_MIN, env)
+        upload_cap = _resolve_cap(_UPLOAD_ENV, _DEFAULT_UPLOAD_PER_MIN, env)
 
-        # Both caps disabled? Skip entirely.
-        if http_cap == 0 and ws_cap == 0:
+        # Every cap disabled? Skip entirely.
+        if http_cap == 0 and ws_cap == 0 and upload_cap == 0:
             await asgi_app(scope, receive, send)
             return
 
@@ -286,6 +323,23 @@ def rate_limit_middleware(asgi_app: Callable) -> Callable:
         now = time.monotonic()
 
         if scope_type == "http":
+            method = (scope.get("method") or "GET").upper()
+            if method == "POST" and path == "/_upload":
+                if _UPLOAD_WINDOW.record_and_check(ip, now, upload_cap):
+                    logger.warning(
+                        "rate_limit: upload cap exceeded for %s (cap=%d/min)",
+                        ip or "<unknown>", upload_cap,
+                    )
+                    body, h429 = _build_429_response()
+                    await send({
+                        "type": "http.response.start",
+                        "status": int(HTTPStatus.TOO_MANY_REQUESTS),
+                        "headers": h429,
+                    })
+                    await send({"type": "http.response.body", "body": body})
+                    _maybe_prune(now)
+                    return
+
             if _HTTP_WINDOW.is_over(ip, now, http_cap):
                 logger.warning(
                     "rate_limit: HTTP cap exceeded for %s (cap=%d/min, path=%s)",
@@ -364,9 +418,10 @@ def _reset_for_tests() -> None:
     global _event_count
     with _event_count_lock:
         _event_count = 0
-    with _HTTP_WINDOW._lock, _WS_WINDOW._lock:
+    with _HTTP_WINDOW._lock, _WS_WINDOW._lock, _UPLOAD_WINDOW._lock:
         _HTTP_WINDOW._events.clear()
         _WS_WINDOW._events.clear()
+        _UPLOAD_WINDOW._events.clear()
 
 
 __all__ = [

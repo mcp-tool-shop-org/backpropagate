@@ -119,7 +119,7 @@ ssh -L 7860:localhost:7860 you@gpu-host
 # Then on your laptop: http://localhost:7860
 ```
 
-`backprop ui --auth user:pass` runs through the v1.2.0 FastAPI auth middleware and gates every HTTP route + the `/_event` WebSocket upgrade on the supplied credentials. `backprop ui --share` and `backprop ui --host 0.0.0.0` without `--auth` exit `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]` — a public URL or non-loopback bind without credentials is the v1.1.x foot-gun closed by [GHSA-f65r-h4g3-3h9h](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/GHSA-f65r-h4g3-3h9h). See [the troubleshooting page](/backpropagate/handbook/troubleshooting/#what-does-runtime_ui_auth_not_enforced-mean) for the full contract and the security advisory.
+`backprop ui --auth user:pass` runs through the v1.2.0 FastAPI auth middleware and gates every HTTP route + the `/_event` WebSocket upgrade on the supplied credentials. `backprop ui --share` and `backprop ui --host 0.0.0.0` without `--auth` exit `2` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]` — a public URL or non-loopback bind without credentials is the v1.1.x foot-gun closed by [GHSA-f65r-h4g3-3h9h](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/GHSA-f65r-h4g3-3h9h). See [the troubleshooting page](/backpropagate/handbook/troubleshooting/#what-does-runtime_ui_auth_not_enforced-mean) for the full contract and the security advisory.
 
 ## What success looks like
 

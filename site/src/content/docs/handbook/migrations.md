@@ -278,7 +278,7 @@ This extra was removed in **v1.2.0**, not v1.3 — but it's worth re-flagging be
 
 #### `--auth-file <path>` CLI flag
 
-A shell-history-safe alternative to `--auth user:pass`. Reads a `user:pass` line from a file. Mutually exclusive with `--auth` — passing both exits `1` with `INPUT_AUTH_INVALID_SHAPE`. Satisfies the same `--share` / `--host <non-loopback>` gate that `--auth` does.
+A shell-history-safe alternative to `--auth user:pass`. Reads a `user:pass` line from a file. Mutually exclusive with `--auth` — passing both exits `64` with `INPUT_AUTH_INVALID_SHAPE`. Satisfies the same `--share` / `--host <non-loopback>` gate that `--auth` does.
 
 ```bash
 echo -n "alice:super-secret-password" > ~/.config/backpropagate/auth

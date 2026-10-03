@@ -64,6 +64,7 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 | `BACKPROPAGATE_SECURITY__AUTH_PASSWORD` | unset | Auth password for the UI. Stored as a secret in the structured config. |
 | `BACKPROPAGATE_SECURITY__ALLOWED_PATHS` | unset (no restriction) | Comma-separated list of directories the UI is allowed to read/write. |
 | `BACKPROPAGATE_SECURITY__BLOCK_PATH_TRAVERSAL` | `true` | Refuse paths containing `..` segments. |
+| `BACKPROPAGATE_SECURITY__VALIDATE_FILE_MAGIC` | `true` | **On by default since 1.8.2.** Check an uploaded dataset's first bytes against its extension (`.jsonl` / `.json` / `.csv` / `.txt` / `.parquet`) before it is stored. `false` trusts the extension alone. |
 | `BACKPROPAGATE_SECURITY__SESSION_TIMEOUT_MINUTES` | `30` | UI session lifetime. |
 | `BACKPROPAGATE_SECURITY__JWT_SECRET` | unset (random) | JWT signing secret. If unset, a random one is generated per process and sessions are lost on restart. |
 | `BACKPROPAGATE_SECURITY__JWT_ALGORITHM` | `HS256` | JWT signing algorithm. |

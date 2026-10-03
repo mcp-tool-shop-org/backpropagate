@@ -313,7 +313,7 @@ def _hub_group() -> rx.Component:
                 rx.flex(
                     _label("Token-file path (mutually exclusive with token above)"),
                     rx.input(
-                        placeholder="~/.config/backpropagate/hf-token",
+                        placeholder="~/.backpropagate/hf-token",
                         value=ExportState.hub_token_file_path,
                         on_change=ExportState.set_hub_token_file_path,
                         size="2",
@@ -325,11 +325,12 @@ def _hub_group() -> rx.Component:
                         ),
                     ),
                     rx.text(
-                        "Safer than the inline token field — the path is "
-                        "validated here; the file is read at push time so "
-                        "the credential never enters the WS state. Mode "
-                        "0600 (rw owner-only) is recommended; widened modes "
-                        "trigger a stderr warning, not a hard error.",
+                        "Safer than the token field above. The file must be "
+                        "inside your .backpropagate folder (the one that holds "
+                        "ui-outputs), and it is read when the push starts, so "
+                        "the token itself never reaches the browser. Keep the "
+                        "file readable by you only (mode 0600); a wider mode "
+                        "gets a warning at startup, not an error.",
                         size="1",
                         style={
                             "color": "var(--bp-muted)",

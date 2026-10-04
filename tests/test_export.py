@@ -1,6 +1,7 @@
 """Tests for export functions."""
 
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1147,6 +1148,86 @@ class TestFallbackQuantization:
              patch.object(export_mod, "_run_subprocess_interruptible", side_effect=fake_run):
             assert export_mod.register_with_ollama(sample_gguf_path, "m", quantize="q4_K_M")
         assert seen["cmd"][-2:] == ["--quantize", "q4_K_M"]
+
+    def test_converter_argv_plain_interpreter_runs_the_script(self, tmp_path):
+        from backpropagate import export as export_mod
+
+        script = tmp_path / "convert_hf_to_gguf.py"
+        assert export_mod._converter_argv(script, isolated=False) == [sys.executable, str(script)]
+
+    def test_converter_bootstrap_makes_the_script_folder_importable(self, tmp_path):
+        """Under an isolated interpreter (the Store's ._pth mode), the converter
+        must still import its sibling conversion/ package."""
+        from backpropagate import export as export_mod
+
+        llama = tmp_path / "llama.cpp"
+        (llama / "conversion").mkdir(parents=True)
+        (llama / "conversion" / "__init__.py").write_text("VALUE = 'sibling ok'\n", encoding="utf-8")
+        script = llama / "convert_hf_to_gguf.py"
+        script.write_text(
+            "import sys\nfrom conversion import VALUE\nprint(VALUE, sys.argv[1:], __name__)\n",
+            encoding="utf-8",
+        )
+        argv = export_mod._converter_argv(script, isolated=True)
+        assert argv[:2] == [sys.executable, "-c"]
+        # -I: isolated mode, which leaves the script's folder off sys.path.
+        plain = subprocess.run([sys.executable, "-I", str(script), "a"],
+                               capture_output=True, text=True, cwd=tmp_path)
+        assert plain.returncode != 0 and "conversion" in plain.stderr
+        boot = subprocess.run([argv[0], "-I", *argv[1:], "a", "--b"],
+                              capture_output=True, text=True, cwd=tmp_path)
+        assert boot.returncode == 0, boot.stderr
+        assert boot.stdout.strip() == "sibling ok ['a', '--b'] __main__"
+
+    @pytest.mark.parametrize("refusal", [
+        # Ollama 0.35.1, verbatim (2026-10-04).
+        "Error: create-time quantization is only supported for safetensors "
+        "imports; quantize GGUF models before importing",
+        'Error: unsupported --quantize "q4_K_M": supported types are int4, '
+        "int8, nvfp4, mxfp4, mxfp8",
+    ])
+    def test_register_falls_back_when_ollama_will_not_quantize_gguf(
+        self, sample_gguf_path, refusal
+    ):
+        """Ollama 0.35+ quantizes no GGUF: register the f16 file and say why."""
+        from backpropagate import export as export_mod
+
+        cmds: list = []
+
+        def fake_run(cmd, **kwargs):
+            cmds.append(cmd)
+            if "--quantize" in cmd:
+                raise subprocess.CalledProcessError(1, cmd, output="", stderr=refusal)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        notes: list[str] = []
+        with patch.object(export_mod.shutil, "which", return_value="/usr/bin/ollama"), \
+             patch.object(export_mod, "_run_subprocess_interruptible", side_effect=fake_run):
+            assert export_mod.register_with_ollama(
+                sample_gguf_path, "m", quantize="q4_K_M", on_fallback=notes.append
+            )
+        assert len(cmds) == 2
+        assert "--quantize" not in cmds[1]
+        assert cmds[1][:3] == ["ollama", "create", "m"]
+        assert len(notes) == 1
+        assert "q4_K_M" in notes[0] and "llama-quantize" in notes[0]
+
+    def test_register_other_quantize_failures_still_raise(self, sample_gguf_path):
+        """Only Ollama's GGUF-quantize refusal is retried; other errors surface."""
+        from backpropagate import export as export_mod
+        from backpropagate.exceptions import OllamaRegistrationError
+
+        def fake_run(cmd, **kwargs):
+            raise subprocess.CalledProcessError(1, cmd, output="", stderr="Error: connection refused")
+
+        notes: list[str] = []
+        with patch.object(export_mod.shutil, "which", return_value="/usr/bin/ollama"), \
+             patch.object(export_mod, "_run_subprocess_interruptible", side_effect=fake_run), \
+             pytest.raises(OllamaRegistrationError, match="connection refused"):
+            export_mod.register_with_ollama(
+                sample_gguf_path, "m", quantize="q4_K_M", on_fallback=notes.append
+            )
+        assert notes == []
 
 
 class TestUnslothGgufGate:

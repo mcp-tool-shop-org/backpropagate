@@ -495,6 +495,149 @@ class TestLlamaCppManifest:
         assert "convert_hf_to_gguf.py" in mod.LLAMACPP_MANIFEST
         assert "gguf-py/gguf/__init__.py" in mod.LLAMACPP_MANIFEST
 
+    def test_conversion_package_is_copied(self, mod, tmp_path):
+        """b11323's converter imports conversion/*; 1.8.2 left it out."""
+        archive = tmp_path / "conv.zip"
+        _zip_members(
+            archive,
+            mod.LLAMACPP_TAG,
+            {"conversion/__init__.py": b"x", "conversion/llama.py": b"y", "docs/x.md": b"z"},
+        )
+        with zipfile.ZipFile(archive) as zf:
+            got = mod.llamacpp_archive_members(zf, mod.LLAMACPP_TAG)
+        assert set(got) == {"conversion/__init__.py", "conversion/llama.py"}
+
+    def test_manifest_pins_the_converter_package(self, mod):
+        for rel in ("conversion/__init__.py", "conversion/base.py",
+                    "conversion/llama.py", "conversion/qwen.py"):
+            assert rel in mod.LLAMACPP_MANIFEST, rel
+
+
+class TestLlamaQuantize:
+    """llama-quantize from the pinned release zip, every copied file checked."""
+
+    def _zip(self, path: Path, files: dict[str, bytes]) -> None:
+        with zipfile.ZipFile(path, "w") as zf:
+            for name, data in files.items():
+                zf.writestr(name, data)
+
+    def test_pins_cover_the_exe_its_dlls_and_the_openmp_licence(self, mod):
+        names = set(mod.LLAMACPP_BIN_FILES)
+        assert {"llama-quantize.exe", "llama-quantize-impl.dll", "llama.dll",
+                "llama-common.dll", "ggml.dll", "ggml-base.dll", "libomp.dll",
+                "LICENSE-LLVM-OpenMP"} == names
+        assert mod.LLAMACPP_TAG in mod.LLAMACPP_BIN_URL
+        assert re.fullmatch(r"[0-9a-f]{64}", mod.LLAMACPP_BIN_SHA256)
+
+    def test_missing_member_is_refused(self, mod, tmp_path):
+        archive = tmp_path / "bin.zip"
+        self._zip(archive, {"llama-quantize.exe": b"x"})
+        with zipfile.ZipFile(archive) as zf, pytest.raises(RuntimeError, match="has no"):
+            mod.llamacpp_bin_members(zf)
+
+    def test_staged_next_to_the_converter_when_hashes_match(self, mod, tmp_path, monkeypatch):
+        files = {name: name.encode() for name in mod.LLAMACPP_BIN_FILES}
+        monkeypatch.setattr(
+            mod, "LLAMACPP_BIN_FILES",
+            {name: hashlib.sha256(data).hexdigest() for name, data in files.items()},
+        )
+        downloads = tmp_path / "downloads"
+        downloads.mkdir()
+        archive = downloads / f"llama-{mod.LLAMACPP_TAG}-bin-win-cpu-x64.zip"
+        self._zip(archive, {**files, "llama-server.exe": b"not copied"})
+        monkeypatch.setattr(mod, "LLAMACPP_BIN_SHA256", mod._sha256_file(archive))
+        stage = tmp_path / "stage"
+        (stage / "App" / "vendor" / "llama.cpp").mkdir(parents=True)
+        assert mod.stage_llamacpp_quantize(downloads, stage) == {"llama_quantize_files": 8}
+        vendor = stage / "App" / "vendor" / "llama.cpp"
+        assert (vendor / "llama-quantize.exe").read_bytes() == b"llama-quantize.exe"
+        assert not (vendor / "llama-server.exe").exists()
+
+    def test_changed_member_fails(self, mod, tmp_path, monkeypatch):
+        files = {name: name.encode() for name in mod.LLAMACPP_BIN_FILES}
+        downloads = tmp_path / "downloads"
+        downloads.mkdir()
+        archive = downloads / f"llama-{mod.LLAMACPP_TAG}-bin-win-cpu-x64.zip"
+        self._zip(archive, files)  # real pins, fake bytes
+        monkeypatch.setattr(mod, "LLAMACPP_BIN_SHA256", mod._sha256_file(archive))
+        stage = tmp_path / "stage"
+        (stage / "App" / "vendor" / "llama.cpp").mkdir(parents=True)
+        with pytest.raises(RuntimeError, match="manifest mismatch"):
+            mod.stage_llamacpp_quantize(downloads, stage)
+        assert not (stage / "App" / "vendor" / "llama.cpp" / "llama-quantize.exe").exists()
+
+
+class TestGgufGate:
+    """The staged Python must export a real q4_k_m GGUF through export_gguf."""
+
+    def test_script_runs_the_real_export_and_demands_llama_quantize(self, mod):
+        script = mod.gguf_gate_script()
+        compile(script, "<gguf-gate>", "exec")
+        assert "from backpropagate.export import export_gguf" in script
+        assert "quantization='q4_k_m'" in script
+        assert "BACKPROPAGATE_LLAMA_CPP_PATH" in script
+        assert "deferred_quantization" in script
+        assert "b'GGUF'" in script
+
+    def test_fixture_is_pinned_to_a_commit(self, mod):
+        assert re.fullmatch(r"[0-9a-f]{40}", mod.GGUF_GATE_MODEL_REVISION)
+        assert "tokenizer.model" in mod.GGUF_GATE_MODEL_FILES  # the sentencepiece path
+        for digest in mod.GGUF_GATE_MODEL_FILES.values():
+            assert re.fullmatch(r"[0-9a-f]{64}", digest)
+
+    def _cached_fixture(self, mod, downloads: Path) -> None:
+        model = downloads / "gguf-gate-model"
+        model.mkdir(parents=True)
+        for name in mod.GGUF_GATE_MODEL_FILES:
+            (model / name).write_bytes(name.encode())
+
+    def _patch_fixture_pins(self, mod, monkeypatch):
+        monkeypatch.setattr(
+            mod, "GGUF_GATE_MODEL_FILES",
+            {name: hashlib.sha256(name.encode()).hexdigest() for name in mod.GGUF_GATE_MODEL_FILES},
+        )
+
+    def test_failure_raises_with_the_output_tail(self, mod, tmp_path, monkeypatch):
+        self._patch_fixture_pins(mod, monkeypatch)
+        downloads = tmp_path / "downloads"
+        self._cached_fixture(mod, downloads)
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen["env"] = kw["env"]
+            return subprocess.CompletedProcess(
+                cmd, 1, stdout="", stderr="ModuleNotFoundError: No module named 'sentencepiece'"
+            )
+
+        monkeypatch.setenv("BACKPROPAGATE_LLAMA_CPP_PATH", "C:/elsewhere")
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+        with pytest.raises(RuntimeError, match="sentencepiece"):
+            mod.gate_gguf_export(Path("python.exe"), tmp_path / "stage", downloads, tmp_path / "gate")
+        assert "BACKPROPAGATE_LLAMA_CPP_PATH" not in seen["env"]
+        assert seen["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
+
+    def test_must_use_the_staged_converter(self, mod, tmp_path, monkeypatch):
+        self._patch_fixture_pins(mod, monkeypatch)
+        downloads = tmp_path / "downloads"
+        self._cached_fixture(mod, downloads)
+        stage = tmp_path / "stage"
+        vendor = stage / "App" / "vendor" / "llama.cpp"
+        vendor.mkdir(parents=True)
+
+        def run_with(llama: Path):
+            line = (
+                '{"llama_cpp": "' + str(llama).replace("\\", "/")
+                + '", "gguf": "gate-q4_k_m.gguf", "bytes": 1, "quantization": "q4_k_m"}'
+            )
+            return lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, stdout=line + "\n", stderr="")
+
+        monkeypatch.setattr(mod.subprocess, "run", run_with(tmp_path / "other"))
+        with pytest.raises(RuntimeError, match="not the staged"):
+            mod.gate_gguf_export(Path("python.exe"), stage, downloads, tmp_path / "gate")
+        monkeypatch.setattr(mod.subprocess, "run", run_with(vendor))
+        info = mod.gate_gguf_export(Path("python.exe"), stage, downloads, tmp_path / "gate")
+        assert info["quantization"] == "q4_k_m"
+
 
 class TestNoticePins:
     def test_changed_body_fails(self, mod, tmp_path, monkeypatch):
@@ -534,3 +677,21 @@ class TestNoticePins:
         text = (stage / "THIRD_PARTY_NOTICES.txt").read_text(encoding="utf-8")
         assert "our license" in text
         assert "the license text" in text
+
+    def test_staged_llamacpp_and_openmp_licences_are_written(self, mod, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            mod, "NOTICES", [entry for entry in mod.NOTICES if entry[1] is None]
+        )
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "LICENSE").write_text("our license", encoding="utf-8")
+        stage = tmp_path / "stage"
+        vendor = stage / "App" / "vendor" / "llama.cpp"
+        vendor.mkdir(parents=True)
+        (vendor / "LICENSE").write_text("llama.cpp MIT text", encoding="utf-8")
+        (vendor / "LICENSE-LLVM-OpenMP").write_text("LLVM Exceptions text", encoding="utf-8")
+        mod.stage_notices(repo, stage, tmp_path / "downloads")
+        text = (stage / "THIRD_PARTY_NOTICES.txt").read_text(encoding="utf-8")
+        assert "llama.cpp MIT text" in text
+        assert "LLVM Exceptions text" in text
+        assert "libomp.dll" in text

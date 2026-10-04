@@ -25,6 +25,7 @@ import subprocess
 import sys
 import time
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -828,8 +829,25 @@ _LLAMA_CPP_CONVERT_OUTTYPES = frozenset({"f16", "q8_0"})
 # Levels `ollama create --quantize` can produce from an f16 GGUF. Measured on
 # Ollama 0.34: it accepts F32, F16, Q4_K_S, Q4_K_M and Q8_0 and rejects
 # Q5_K_M, Q4_0 and Q2_K. Only the levels the converter cannot write itself
-# are listed.
+# are listed. Ollama 0.35 quantizes no GGUF at all (measured on 0.35.1,
+# 2026-10-04); register_with_ollama then registers the f16 file as it is.
 _OLLAMA_QUANTIZE_LEVELS = {"q4_k_m": "q4_K_M"}
+
+# What `ollama create --quantize` prints when it will not quantize a GGUF
+# import. 0.35.1: "create-time quantization is only supported for
+# safetensors imports; quantize GGUF models before importing", and for a
+# k-quant level: 'unsupported --quantize "q4_K_M": supported types are
+# int4, int8, ...'.
+_OLLAMA_GGUF_QUANTIZE_REFUSALS = (
+    "create-time quantization is only supported",
+    "unsupported --quantize",
+)
+
+
+def _ollama_refused_gguf_quantize(stderr: str | None) -> bool:
+    """True when ``ollama create`` failed only because it will not quantize a GGUF."""
+    text = (stderr or "").lower()
+    return any(marker in text for marker in _OLLAMA_GGUF_QUANTIZE_REFUSALS)
 
 # llama-quantize type names for GGUFQuantization values.
 _LLAMA_QUANTIZE_TYPES = {
@@ -869,6 +887,27 @@ def _unsloth_gguf_ready() -> tuple[bool, str]:
             "llama.cpp there (or point UNSLOTH_LLAMA_CPP_PATH at a build)."
         )
     return True, ""
+
+
+# llama.cpp's converter imports its conversion/ package from its own folder.
+# An isolated interpreter does not put a script's folder on sys.path: the
+# Store edition's embedded CPython runs in ._pth mode (found by the build's
+# GGUF gate, 2026-10-04), and so do `python -I` / `-P` / PYTHONSAFEPATH.
+# There the converter runs through this bootstrap, which adds the folder.
+_CONVERTER_BOOTSTRAP = (
+    "import os, runpy, sys; sys.argv = sys.argv[1:]; "
+    "sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0]))); "
+    "runpy.run_path(sys.argv[0], run_name='__main__')"
+)
+
+
+def _converter_argv(convert_script: Path, isolated: bool | None = None) -> list[str]:
+    """The interpreter argv that runs ``convert_script`` with its folder importable."""
+    if isolated is None:
+        isolated = bool(getattr(sys.flags, "safe_path", False) or sys.flags.isolated)
+    if isolated:
+        return [sys.executable, "-c", _CONVERTER_BOOTSTRAP, str(convert_script)]
+    return [sys.executable, str(convert_script)]
 
 
 def _find_llama_quantize(convert_script: Path) -> Path | None:
@@ -1869,10 +1908,11 @@ def export_gguf(
                     output_path=str(output_path),
                     quantization=quant_str,
                     suggestion=(
-                        "Re-run with --quantization q8_0 (or f16). Or build "
-                        "llama.cpp's llama-quantize in the llama.cpp checkout "
-                        "(build/bin) or put it on PATH. Or register with Ollama "
-                        f"(--ollama), which quantizes to {ollama_levels} itself."
+                        "Re-run with --quantization q8_0 (or f16). Or put llama.cpp's "
+                        "llama-quantize (a release build or your own) in the llama.cpp "
+                        "checkout (root or build/bin) or on PATH. Or register with "
+                        f"Ollama (--ollama): Ollama 0.34 and older quantize to "
+                        f"{ollama_levels} themselves; 0.35 and newer register the f16 file."
                     ),
                 )
         convert_outtype = "f16"
@@ -1920,8 +1960,8 @@ def export_gguf(
     logger.warning(f"Using llama.cpp convert script: {convert_script}")
     # Run conversion
     cmd = [
-        sys.executable,  # the running interpreter, not whatever "python" is on PATH
-        str(convert_script),
+        # the running interpreter, not whatever "python" is on PATH
+        *_converter_argv(convert_script),
         str(merged_path),
         "--outfile",
         str(convert_path),
@@ -2007,8 +2047,9 @@ def export_gguf(
     elif deferred_quantization is not None:
         gguf_path = convert_path
         logger.warning(
-            "No llama-quantize found; wrote an f16 GGUF (%s). Ollama will "
-            "quantize it to %s at registration (ollama create --quantize).",
+            "No llama-quantize found; wrote an f16 GGUF (%s). Ollama is asked "
+            "to quantize it to %s at registration (ollama create --quantize); "
+            "Ollama 0.35 and newer register it at f16 instead.",
             gguf_path, deferred_quantization,
         )
 
@@ -2160,6 +2201,7 @@ def register_with_ollama(
     model_name: str,
     system_prompt: str | None = None,
     quantize: str | None = None,
+    on_fallback: Callable[[str], None] | None = None,
 ) -> bool:
     """
     Register GGUF with Ollama.
@@ -2172,7 +2214,10 @@ def register_with_ollama(
         system_prompt: Optional system prompt
         quantize: Let Ollama quantize the (f16) GGUF to this level
             (``ollama create --quantize``), e.g. ``q4_K_M``. Pass
-            ``ExportResult.deferred_quantization``.
+            ``ExportResult.deferred_quantization``. Ollama 0.35 and newer
+            refuse to quantize a GGUF; the file is then registered as it is.
+        on_fallback: Called with a one-line explanation when Ollama refused
+            ``quantize`` and the model was registered unquantized.
 
     Returns:
         True if successful
@@ -2228,13 +2273,35 @@ def register_with_ollama(
                     model_name, f"Invalid quantization level {quantize!r}"
                 )
             create_cmd += ["--quantize", quantize]
-        result = _run_subprocess_interruptible(
-            create_cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=600,
-        )
+        try:
+            _run_subprocess_interruptible(
+                create_cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=600,
+            )
+        except subprocess.CalledProcessError as e:
+            if not (quantize and _ollama_refused_gguf_quantize(e.stderr)):
+                raise
+            # Ollama 0.35+ quantizes no GGUF. Register the file as it is and
+            # say so, instead of failing an export that already succeeded.
+            message = (
+                f"Ollama would not quantize the GGUF to {quantize} (Ollama 0.35 "
+                f"and newer quantize only safetensors imports); registered "
+                f"{gguf_path.name} as it is. For {quantize}, put llama.cpp's "
+                "llama-quantize next to convert_hf_to_gguf.py or on PATH and export again."
+            )
+            logger.warning(message)
+            if on_fallback is not None:
+                on_fallback(message)
+            _run_subprocess_interruptible(
+                ["ollama", "create", model_name, "-f", str(modelfile_path)],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=600,
+            )
         logger.info(f"Successfully registered model '{model_name}' with Ollama")
         return True
     except subprocess.TimeoutExpired:

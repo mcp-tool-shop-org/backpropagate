@@ -2424,10 +2424,12 @@ def _cmd_export_body(args: argparse.Namespace) -> int:
 
             deferred = getattr(result, "deferred_quantization", None)
             if isinstance(deferred, str) and deferred:
-                _print_info(f"==> Ollama will quantize the f16 GGUF to {deferred}.")
+                _print_info(f"==> Asking Ollama to quantize the f16 GGUF to {deferred}.")
             else:
                 deferred = None
-            if register_with_ollama(result.path, ollama_name, quantize=deferred):
+            if register_with_ollama(
+                result.path, ollama_name, quantize=deferred, on_fallback=_print_warning
+            ):
                 _print_success(f"Registered with Ollama: {ollama_name}")
                 _print_info(f"Run with: ollama run {ollama_name}")
             else:

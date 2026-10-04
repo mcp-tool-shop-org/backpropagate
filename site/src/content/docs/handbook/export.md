@@ -69,16 +69,18 @@ Backpropagate supports three export formats via `trainer.export(format=...)`:
 Without Unsloth, or when Unsloth has no built llama.cpp, the export uses llama.cpp's converter script. It needs:
 
 - A llama.cpp **source checkout**. The `gguf` package from pip is not enough; `convert_hf_to_gguf.py` imports from the source tree. Clone it to `~/llama.cpp`, or point `BACKPROPAGATE_LLAMA_CPP_PATH` at the checkout or the script.
-- `sentencepiece` and `protobuf` installed in the same environment as backpropagate.
+- `sentencepiece`, which the converter imports for every model family. It is a backpropagate dependency since 1.8.3.
 
 The converter itself writes `f16` and `q8_0`. The k-quants come from one of two places:
 
 | You are exporting | How the quantization happens |
 |---|---|
-| `q4_k_m` to Ollama (`--ollama`), the default | The export writes f16 and `ollama create --quantize q4_K_M` quantizes it. Nothing to compile. |
-| `q5_k_m`, `q4_0`, `q2_k`, or `q4_k_m` as a bare `.gguf` file | A compiled `llama-quantize` is used if one is found in the llama.cpp checkout (the root, `build/bin`, `build/bin/Release`) or on PATH. |
+| any k-quant (`q4_k_m`, `q5_k_m`, `q4_0`, `q2_k`), as a file or to Ollama | A compiled `llama-quantize` is used if one is found in the llama.cpp checkout (the root, `build/bin`, `build/bin/Release`) or on PATH. llama.cpp's [release builds](https://github.com/ggml-org/llama.cpp/releases) include it; nothing to compile. |
+| `q4_k_m` to Ollama (`--ollama`), the default, with no `llama-quantize` | The export writes f16 and asks `ollama create --quantize q4_K_M` to quantize it. Ollama 0.34 and older do. Ollama 0.35 and newer quantize no GGUF file: the f16 model is registered as it is, and the export says so. |
 
 If neither can produce the level you asked for, the export stops before the merge and says which levels are available.
+
+The Microsoft Store edition ships the converter and `llama-quantize` (llama.cpp b11323), so every level works there with no setup.
 
 ### Unsloth and system packages
 

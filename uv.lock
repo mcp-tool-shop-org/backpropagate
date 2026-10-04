@@ -314,7 +314,7 @@ wheels = [
 
 [[package]]
 name = "backpropagate"
-version = "1.8.2"
+version = "1.8.3"
 source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
@@ -324,6 +324,7 @@ dependencies = [
     { name = "filelock" },
     { name = "packaging" },
     { name = "peft" },
+    { name = "sentencepiece" },
     { name = "tenacity" },
     { name = "torch" },
     { name = "transformers" },
@@ -480,6 +481,7 @@ requires-dist = [
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.5.0" },
     { name = "reflex", marker = "extra == 'ui'", specifier = ">=0.9.2" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
+    { name = "sentencepiece", specifier = ">=0.2.0" },
     { name = "structlog", marker = "extra == 'logging'", specifier = ">=24.1.0" },
     { name = "tenacity", specifier = ">=8.0.0" },
     { name = "torch", specifier = ">=2.0.0,<3" },

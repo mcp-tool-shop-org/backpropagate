@@ -4,7 +4,7 @@
 
 Headless LLM fine-tuning library with smart defaults, Windows support, and one-click GGUF export to Ollama. Train a 7B model with 3 lines of Python; ship to Ollama with one more.
 
-Status: **stable / production** (Development Status :: 5 — Production/Stable in pyproject). **v1.8.2** shipped 2026-10-03 on PyPI + npm + GitHub (the web UI trains, multi-runs and exports with an "i" on every setting; the Dataset page cleans a file and hands it to training; VRAM measured on the running GPU; the sandbox, origin, Host and launch-token hardening from the 2026-10-02 review; Microsoft Store MSIX built by `scripts/build_msix.py`, submitted to Partner Center the same day). Store track notes: `docs/handoff-2026-10-01-msix-store.md`. Experiment plan: `docs/handoff-2026-09-30-full-ft-experiments.md` §4a.
+Status: **stable / production** (Development Status :: 5 — Production/Stable in pyproject). **v1.8.2** shipped 2026-10-03 on PyPI + npm + GitHub (the web UI trains, multi-runs and exports with an "i" on every setting; the Dataset page cleans a file and hands it to training; VRAM measured on the running GPU; the sandbox, origin, Host and launch-token hardening from the 2026-10-02 review; Microsoft Store MSIX built by `scripts/build_msix.py`, submitted to Partner Center the same day). **v1.8.3** (2026-10-04) fixes GGUF export without Unsloth (`sentencepiece` dependency; Ollama 0.35 no longer quantizes GGUF) and the Store build's converter (`conversion/` + `llama-quantize`, guarded by a build gate that exports a real q4_k_m GGUF); 1.8.2's certified Store build was never published. Store track notes: `docs/handoff-2026-10-01-msix-store.md`. Experiment plan: `docs/handoff-2026-09-30-full-ft-experiments.md` §4a.
 
 ## Architecture
 

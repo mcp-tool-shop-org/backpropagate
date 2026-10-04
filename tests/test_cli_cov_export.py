@@ -191,7 +191,7 @@ class TestExportFormats:
             seen["gguf"] = kw
             return _result(adapter.parent / "g.gguf", deferred_quantization="q4_k_m")
 
-        def fake_register(path, name, quantize=None):
+        def fake_register(path, name, quantize=None, on_fallback=None):
             seen["register"] = (path, name, quantize)
             return True
 
@@ -201,11 +201,30 @@ class TestExportFormats:
         assert cli.cmd_export(parse(argv)) == cli.EXIT_OK
         out = capsys.readouterr().out
         assert "Quantization: q4_k_m" in out
-        assert "Ollama will quantize the f16 GGUF to q4_k_m" in out
+        assert "Asking Ollama to quantize the f16 GGUF to q4_k_m" in out
         assert "Registered with Ollama: mymodel" in out
         assert "ollama run mymodel" in out
         assert seen["gguf"]["defer_quantization_to_ollama"] is True
         assert seen["register"][1:] == ("mymodel", "q4_k_m")
+
+    def test_gguf_ollama_quantize_refusal_is_printed(self, adapter, monkeypatch, capsys):
+        """Ollama 0.35+ registers the f16 file; the CLI says so on the console."""
+        monkeypatch.setattr("backpropagate.export.load_model_for_export", lambda p: ("M", "T"))
+        monkeypatch.setattr(
+            "backpropagate.export.export_gguf",
+            lambda **kw: _result(adapter.parent / "g.gguf", deferred_quantization="q4_K_M"),
+        )
+
+        def fake_register(path, name, quantize=None, on_fallback=None):
+            on_fallback("Ollama would not quantize the GGUF to q4_K_M")
+            return True
+
+        monkeypatch.setattr("backpropagate.export.register_with_ollama", fake_register)
+        argv = ["export", "lora", "--format", "gguf", "--output", "g", "--ollama", "--ollama-name", "mymodel"]
+        assert cli.cmd_export(parse(argv)) == cli.EXIT_OK
+        out = capsys.readouterr()
+        assert "Ollama would not quantize the GGUF to q4_K_M" in out.out + out.err
+        assert "Registered with Ollama: mymodel" in out.out
 
     def test_gguf_registration_failure_is_partial_success(self, adapter, monkeypatch, capsys):
         monkeypatch.setattr("backpropagate.export.load_model_for_export", lambda p: ("M", "T"))

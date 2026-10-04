@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.3] - 2026-10-04
+
+### Fixed
+
+- **GGUF export works without Unsloth.** llama.cpp's converter imports
+  `sentencepiece` for every model family (Llama, Qwen, Mistral, SmolLM), and
+  only Unsloth brought it in. A plain `pip install backpropagate`, the
+  `[ui]` extra and the 1.8.2 Store build stopped with
+  `RUNTIME_GGUF_EXPORT_FAILED: No module named 'sentencepiece'`.
+  `sentencepiece` is now a dependency.
+- **The default `q4_k_m` export to Ollama works on Ollama 0.35.** Ollama
+  0.35 no longer quantizes GGUF files, so without a compiled
+  `llama-quantize` the registration failed. It now registers the f16 model,
+  says why, and names the fix (put `llama-quantize` next to the converter
+  or on PATH). Ollama 0.34 and older still quantize it.
+- **Store build: GGUF export.** The package copied llama.cpp's
+  `convert_hf_to_gguf.py` without the `conversion/` package it imports, so
+  the converter could not start. The package now carries `conversion/` and
+  `llama-quantize` from the same llama.cpp tag (b11323, every file pinned by
+  SHA-256), and the build refuses to pack unless the staged Python exports a
+  small Llama model to a real q4_k_m GGUF through backpropagate's own export
+  path.
+- **The converter runs under an isolated Python.** The Store's embedded
+  CPython (and `python -I` / `-P`) leaves a script's own folder off
+  `sys.path`, so the converter could not import `conversion/` even when it
+  was there. Export now adds that folder when the interpreter is isolated;
+  other installs run the converter exactly as before. The new build gate
+  found this on its first run.
+
+Found by running 1.8.2 on a rented RTX 5090 with the Store build's exact
+Python stack (torch 2.12.1+cu130). Training, ORPO, KTO, SimPO, FSDP2
+full fine-tuning with offload and FP8 all passed there; with these fixes the
+golden-path smoke (train, export, GGUF, Ollama) passed too.
+
 ## [1.8.2] - 2026-10-03
 
 ### Added
@@ -1317,7 +1351,8 @@ A minor release that takes the project from "polished v1" to "real v1" via a 10-
 
 ---
 
-[Unreleased]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.8.2...HEAD
+[Unreleased]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.8.3...HEAD
+[1.8.3]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.8.2...v1.8.3
 [1.8.2]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.8.1...v1.8.2
 [1.8.1]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.7.2...v1.8.0

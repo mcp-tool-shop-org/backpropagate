@@ -521,10 +521,18 @@ def test_default_q4_k_m_to_ollama(checkpoint: Path, workdir: Path) -> None:
             cwd=workdir,
         )
         out = _assert_cli_ok(proc, "backprop export --format gguf --ollama (default q4_k_m)")
+        level = _ollama_quantization(name).upper()
         if _find_llama_quantize(script) is None and "Unsloth: Merge" not in out:
-            assert "Ollama will quantize the f16 GGUF to q4_K_M" in out, out[-4000:]
-            _record_fact("q4_k_m route", "llama.cpp converter f16 -> ollama create --quantize q4_K_M")
-        assert _ollama_quantization(name).upper() == "Q4_K_M", _ollama_quantization(name)
+            assert "Asking Ollama to quantize the f16 GGUF to q4_K_M" in out, out[-4000:]
+            if "Ollama would not quantize the GGUF" in out:
+                # Ollama 0.35+ quantizes no GGUF; the f16 file is registered.
+                _record_fact("q4_k_m route", "llama.cpp converter f16 -> Ollama 0.35+ registers f16")
+                assert level == "F16", level
+            else:
+                _record_fact("q4_k_m route", "llama.cpp converter f16 -> ollama create --quantize q4_K_M")
+                assert level == "Q4_K_M", level
+        else:
+            assert level == "Q4_K_M", level
         reply = _ollama_generate(name)
         assert reply.get("done") is True, reply
         assert reply.get("eval_count", 0) > 0, f"Ollama generated no tokens: {reply}"

@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "backpropagate"
-version = "1.8.2"
+version = "1.8.3"
 description = "Production-ready headless LLM fine-tuning with smart defaults, Windows support, and modular architecture"
 readme = "README.md"
 license = "MIT"
@@ -105,6 +105,7 @@ dependencies = [
     "packaging>=21.0",  # Version parsing for security checks
     "filelock>=3.0.0",  # Cross-platform advisory file locking for RunHistoryManager (BACKEND-F-012, v1.3 / Wave 6a). Transitive via huggingface_hub/datasets/torch/transformers but pinned explicitly so a future upstream drop never breaks the concurrent-write contract on run_history.json.
     "argcomplete>=3.0.0",  # BRIDGE-F-005: shell completion (bash/zsh/fish) — small pure-Python; activates only when the operator runs `eval "$(register-python-argcomplete backprop)"`.
+    "sentencepiece>=0.2.0",  # GGUF export: llama.cpp's converter imports it for every model family (Llama, Qwen, Mistral, SmolLM). It came in only through unsloth, so the Store build and a bare install could not export (measured 2026-10-04). ~1 MB, wheels for every supported platform.
 ]
 
 [project.optional-dependencies]

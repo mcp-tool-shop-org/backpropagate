@@ -35,6 +35,8 @@ from typing import TYPE_CHECKING, Literal
 import reflex as rx
 
 if TYPE_CHECKING:
+    from reflex.event import EventType
+
     from .dataset_prep import DatasetSummary
 
 # Hub tokens typed into the Export page, by browser session. Process memory
@@ -1462,14 +1464,14 @@ class TrainState(rx.State):
         return TrainState.refresh_estimate
 
     @rx.event
-    def set_method(self, value: str) -> None:
+    def set_method(self, value: str) -> EventType[()] | None:
         if value not in _METHOD_KEYS:
-            return
+            return None
         self.method = value  # type: ignore[assignment]
         self.method_param_error = ""
         if value != "sft" and self.train_mode == "full":
             self.train_mode = "qlora"
-        return TrainState.refresh_estimate  # type: ignore[return-value]
+        return TrainState.refresh_estimate
 
     @rx.event
     def set_method_param(self, key: str, value: str | float) -> None:

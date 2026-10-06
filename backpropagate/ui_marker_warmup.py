@@ -40,11 +40,7 @@ from __future__ import annotations
 import pickle  # nosec B403 — writes Reflex's OWN cache marker format locally; no untrusted input is unpickled
 import runpy
 import sys
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from reflex.config import Config
+from typing import Any
 
 _HOOK_EXIT = 43
 
@@ -67,17 +63,19 @@ def main(argv: list[str]) -> int:
     if payload_fn is None or cache_path_fn is None:
         return 3
 
-    def warm(
-        packages: set[str], config: Config, install_package_managers: Sequence[str]
-    ) -> Any:
+    def warm(*args: Any) -> Any:
+        # Reflex's cached_procedure fingerprints the install call with the SAME arguments the
+        # call receives, and that argument list moved between releases (0.9.5: packages, config,
+        # managers; 0.9.12: packages, dev deps, frozen_lockfile, managers). Forwarding them
+        # untouched keeps the marker byte-identical to the one reflex would write itself.
         marker = cache_path_fn()
         marker.parent.mkdir(parents=True, exist_ok=True)
-        payload = payload_fn(packages, config, install_package_managers)
+        payload = payload_fn(*args)
         marker.write_bytes(pickle.dumps((payload, None)))
         print(f"ui_marker_warmup: wrote {marker}", flush=True)
         raise SystemExit(_HOOK_EXIT)
 
-    js_runtimes._install_frontend_packages = warm  # the in-module call site reads the module global
+    js_runtimes._install_frontend_packages = warm  # type: ignore[assignment]  # the in-module call site reads the module global
 
     sys.argv = [
         "reflex",

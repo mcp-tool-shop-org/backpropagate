@@ -1469,7 +1469,7 @@ class TrainState(rx.State):
         self.method_param_error = ""
         if value != "sft" and self.train_mode == "full":
             self.train_mode = "qlora"
-        return TrainState.refresh_estimate
+        return TrainState.refresh_estimate  # type: ignore[return-value]
 
     @rx.event
     def set_method_param(self, key: str, value: str | float) -> None:

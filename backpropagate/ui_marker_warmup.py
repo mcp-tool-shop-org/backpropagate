@@ -37,16 +37,35 @@ failed or reflex stopped calling the install step); 3 reflex internals moved.
 
 from __future__ import annotations
 
+import inspect
 import pickle  # nosec B403 — writes Reflex's OWN cache marker format locally; no untrusted input is unpickled
 import runpy
 import sys
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from reflex.config import Config
+from typing import Any
 
 _HOOK_EXIT = 43
+
+#: The parameter list of reflex's private ``_frontend_packages_cache_payload`` that ``warm``
+#: below mirrors. ``_install_frontend_packages`` is ``cached_procedure(payload_fn=...)``: the
+#: decorator's wrapper takes exactly the payload function's arguments (and hides the wrapped
+#: function's own signature), so the payload function is where the contract is readable. Reflex 0.9.5 took ``(packages, config, install_package_managers)``; 0.9.12 takes
+#: this. ``main`` refuses (exit 3) on any other shape, and tests/test_ui_marker_warmup.py
+#: fails on a drifted reflex, so a Reflex bump cannot silently write a wrong marker.
+EXPECTED_INSTALL_PARAMS: tuple[str, ...] = (
+    "packages",
+    "development_dependencies",
+    "frozen_lockfile",
+    "install_package_managers",
+)
+
+
+def install_signature_matches(*fns: Any) -> bool:
+    """True when every function takes exactly ``EXPECTED_INSTALL_PARAMS``, in order."""
+    try:
+        return all(tuple(inspect.signature(fn).parameters) == EXPECTED_INSTALL_PARAMS for fn in fns)
+    except (TypeError, ValueError):
+        return False
 
 
 def main(argv: list[str]) -> int:
@@ -66,13 +85,20 @@ def main(argv: list[str]) -> int:
     cache_path_fn = getattr(js_runtimes, "_frontend_packages_cache_path", None)
     if payload_fn is None or cache_path_fn is None:
         return 3
+    if not install_signature_matches(payload_fn):
+        return 3
 
     def warm(
-        packages: set[str], config: Config, install_package_managers: Sequence[str]
+        packages: set[str],
+        development_dependencies: set[str],
+        frozen_lockfile: bool,
+        install_package_managers: Sequence[str],
     ) -> Any:
         marker = cache_path_fn()
         marker.parent.mkdir(parents=True, exist_ok=True)
-        payload = payload_fn(packages, config, install_package_managers)
+        payload = payload_fn(
+            packages, development_dependencies, frozen_lockfile, install_package_managers
+        )
         marker.write_bytes(pickle.dumps((payload, None)))
         print(f"ui_marker_warmup: wrote {marker}", flush=True)
         raise SystemExit(_HOOK_EXIT)

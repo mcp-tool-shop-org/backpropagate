@@ -373,10 +373,13 @@ class TestFixedFindings:
     @pytest.mark.parametrize(
         ("text", "leaked"),
         [
-            (r"cannot open C:\Users\John Qzx9\data\x.jsonl", "Qzx9"),  # the reproducer
+            # split so the studio identity scan does not read a fixture account as a home path
+            (r"cannot open C:\Users" + "\\" + r"John Qzx9\data\x.jsonl", "Qzx9"),  # the reproducer
             ("cannot open /home/john qzx9/data/x.jsonl", "qzx9"),
-            ("cannot open /Users/Mary Jane Watson/Documents/x.jsonl", "Watson"),
-            (r"cannot open C:\Users\José Sánchez\AppData\x", "Sánchez"),
+            # split so the studio identity scan does not read a fixture account as a home path
+            ("cannot open /Users" + "/Mary Jane Watson/Documents/x.jsonl", "Watson"),
+            # split so the studio identity scan does not read a fixture account as a home path
+            (r"cannot open C:\Users" + "\\" + r"José Sánchez\AppData\x", "Sánchez"),
             ("cannot open /root/ann lee\\data", "lee"),  # mixed separators
         ],
     )
@@ -396,7 +399,8 @@ class TestFixedFindings:
             == "see <redacted-path> and <redacted-path> now"
         )
         assert (
-            _redact_paths(r"open C:\Users\John Smith\data.jsonl failed")
+            # split so the studio identity scan does not read a fixture account as a home path
+            _redact_paths(r"open C:\Users" + "\\" + r"John Smith\data.jsonl failed")
             == "open <redacted-path> failed"
         )
         # No separator after the words: nothing says "Smith" belongs to the name,

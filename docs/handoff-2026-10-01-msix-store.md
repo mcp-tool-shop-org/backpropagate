@@ -102,7 +102,7 @@ The values are case-sensitive. Re-read the Publisher value on the Partner Center
 
 ## Repo rules you must follow
 
-- **PRs as the bot.** Open PRs as the `mcp-tool-shop-bot` GitHub App. Token helper: `C:\Users\mikey\.config\mcp-tool-shop-bot\mint_token.py`; recipe in the lead's memory `backpropagate-bot-review-flow.md`. Never print the token or the key.
+- **PRs as the bot.** Open PRs as the `mcp-tool-shop-bot` GitHub App. Token helper: `%USERPROFILE%\<token-helper path>`; recipe in the lead's memory `backpropagate-bot-review-flow.md`. Never print the token or the key.
   - Never approve a PR with Mike's login. Mike approves on GitHub.
   - `main` needs 1 approval and 16 strict checks. Merge one PR at a time, up to date with main.
 - **Public docs are lead-written.** README, CHANGELOG, handbook and SECURITY belong to the lead. List the doc changes you need instead of making them.

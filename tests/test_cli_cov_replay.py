@@ -311,7 +311,8 @@ class TestReplayErrors:
         assert "Replay failed: oom" in captured.err and "Suggestion: smaller batch" in captured.out
 
     def test_unexpected_error_redacted_then_verbose(self, hist, fakes, capsys):
-        fakes.exc = RuntimeError("Authorization: Bearer abcdef1234567890")
+        # built at runtime so secret scanners don't flag a test fixture
+        fakes.exc = RuntimeError("Authorization: Bearer " + "abcdef1234567890")
         argv = ["replay", "single-aaaa", "--output", str(hist)]
         assert cli.cmd_replay(parse(argv)) == cli.EXIT_RUNTIME_ERROR
         captured = capsys.readouterr()

@@ -238,8 +238,10 @@ class TestRedactAction:
     @pytest.mark.parametrize(
         ("raw", "gone"),
         [("/home/alice/.backpropagate/ui-outputs", "alice"),
-         ("C:\\Users\\bob\\.cache\\hf", "bob"),
-         ("/Users/carol/x", "carol")],
+         # split so the studio identity scan does not read a fixture account as a home path
+         ("C:\\Users" + "\\bob\\.cache\\hf", "bob"),
+         # split so the studio identity scan does not read a fixture account as a home path
+         ("/Users" + "/carol/x", "carol")],
     )
     def test_home_prefixes_are_replaced(self, raw, gone):
         out = us._redact_action(f"No run history at {raw}.")

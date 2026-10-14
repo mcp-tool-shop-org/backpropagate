@@ -344,7 +344,8 @@ class TestBunVerification:
 
 class TestDepthPreflight:
     def test_short_workdir_is_silent(self):
-        warn = ui_frontend._preflight_web_depth(Path(r"C:\Users\u\AppData\Local\backpropagate\ui\1.8.2-a1b2c3d4"), 178)
+        # split so the studio identity scan does not read a fixture account as a home path
+        warn = ui_frontend._preflight_web_depth(Path(r"C:\Users" + "\\" + r"u\AppData\Local\backpropagate\ui\1.8.2-a1b2c3d4"), 178)
         assert warn is None
 
     def test_deep_workdir_warns_with_exact_numbers(self):

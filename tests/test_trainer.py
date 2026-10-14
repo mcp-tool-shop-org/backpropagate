@@ -4359,6 +4359,19 @@ class TestOrpoTrlImportGuard:
         for good in ("0.18.0", "0.24.0", "0.27.2", "1.0.0", "1.6.0", "1.13.0"):
             assert good in spec, good
 
+    def test_supported_spec_excludes_triton_only_trl(self):
+        """trl 1.15.0 runs every SFT loss through a Triton-only kernel, so
+        training fails on CPU (huggingface/trl#7659). Only that release is
+        excluded: 1.14.x before it and the fixed release after it resolve."""
+        from packaging.specifiers import SpecifierSet
+
+        from backpropagate import trainer as trainer_mod
+
+        spec = SpecifierSet(trainer_mod._TRL_SUPPORTED_SPEC)
+        assert "1.15.0" not in spec
+        for good in ("1.14.2", "1.15.1", "1.16.0"):
+            assert good in spec, good
+
     def test_orpo_config_import_success_still_builds(self):
         """FC-01 must be inert when trl resolves: the existing mocked-trl path
         (the one all the other ORPO tests rely on) still builds a config.

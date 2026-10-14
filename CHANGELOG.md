@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.4] - 2026-10-14
+
+### Fixed
+
+- **Training works on a CPU-only machine again with a fresh install.**
+  trl 1.15.0 (2026-10-08) runs every SFT loss through a Triton-only
+  kernel, so `pip install backpropagate` on a machine without a GPU
+  resolved to it and training stopped with
+  `TrainingError: Training failed: 0 active drivers`. trl 1.15.0 is now
+  excluded; 1.14.x and the release carrying the upstream fix
+  (huggingface/trl#7669) still resolve. Locked installs were never
+  affected: `uv.lock` holds trl 0.24.0.
+
+### Changed
+
+- Build fake credentials at runtime in CLI and logging tests so secret scanners do not flag test fixtures.
+
 ## [1.8.3] - 2026-10-04
 
 ### Fixed

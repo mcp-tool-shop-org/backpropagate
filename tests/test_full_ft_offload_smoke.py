@@ -44,7 +44,7 @@ Windows PowerShell prompt::
     wsl -d Ubuntu -- bash -lc "
       source ~/bp-offload-smoke/bin/activate &&
       cd /mnt/e/AI/backpropagate &&
-      HF_HUB_CACHE=/mnt/c/Users/mikey/.cache/huggingface/hub \\
+      HF_HUB_CACHE=/mnt/c/Users/<you>/.cache/huggingface/hub \\
       python -m pytest tests/test_full_ft_offload_smoke.py -m 'slow or integration' \\
         -p no:cacheprovider -s -v"
 

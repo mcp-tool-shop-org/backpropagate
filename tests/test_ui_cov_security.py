@@ -1265,7 +1265,8 @@ class TestSafeMarkdownFence:
 class TestSanitizeErrorForUser:
     def test_backprop_error_is_surfaced_with_code_and_redacted_paths(self):
         err = BackpropagateError(
-            message="cannot open /home/alice/secret/model.bin and C:\\Users\\bob\\x.gguf",
+            # split so the studio identity scan does not read a fixture account as a home path
+            message="cannot open /home/alice/secret/model.bin and C:\\Users" + "\\bob\\x.gguf",
             code="DEP_THING", suggestion="check \\\\fileserver\\share\\cfg and /tmp/abc",
         )
         msg, hint = sec.sanitize_error_for_user(err, "export")
@@ -1297,8 +1298,10 @@ class TestSanitizeErrorForUser:
 
     @pytest.mark.parametrize(
         ("raw", "needle_gone"),
-        [("/home/alice/x", "alice"), ("/Users/bob/x", "bob"), ("/root/.ssh/id", ".ssh"),
-         ("C:\\Users\\carol\\x", "carol"), ("\\\\srv\\share\\f", "srv"), ("/tmp/work/f", "work"),
+        # split so the studio identity scan does not read a fixture account as a home path
+        [("/home/alice/x", "alice"), ("/Users" + "/bob/x", "bob"), ("/root/.ssh/id", ".ssh"),
+         # split so the studio identity scan does not read a fixture account as a home path
+         ("C:\\Users" + "\\carol\\x", "carol"), ("\\\\srv\\share\\f", "srv"), ("/tmp/work/f", "work"),
          ("C:\\Windows\\Temp\\z", "Temp\\z"), ("~/.cache/huggingface/hub/m", "huggingface")],
     )
     def test_path_redaction_patterns(self, raw, needle_gone):

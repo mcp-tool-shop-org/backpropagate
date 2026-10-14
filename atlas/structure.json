@@ -14910,7 +14910,7 @@
           "path": ".trivyignore"
         },
         {
-          "hash": "45e5640650ff7100ab640414c6b288caf530c93703eafb11ba921fa908188ad5",
+          "hash": "7eed17370ce781ef2e35981225505906d2c2a573859ab4d61426f9951206f3b2",
           "path": "CHANGELOG.md"
         },
         {
@@ -15018,15 +15018,15 @@
           "path": "osv-scanner.toml"
         },
         {
-          "hash": "edac43c1577579c2c9e5515d14bda534cf2e1b234999d8413bbe159a70e8839c",
+          "hash": "2bdf6b4b2b783a82e8ef298d1789ab91d5145c817f895f37c16143bca13ef851",
           "path": "package.json"
         },
         {
-          "hash": "83d1b6795ed2c071e1bd58213ea850457e9dc218f9e434071ac0be24806a80b8",
+          "hash": "3ed1947759eb55a2055454b2a442519520c8dbed754cfc508e832c74ca228834",
           "path": "pyproject.toml"
         },
         {
-          "hash": "870e8c06bcbe85dee76706c6f04b7f54051a227ec91197b7cf9f48f0b6b9709e",
+          "hash": "596b79fe7822669ee9f47ca3abb461a81a8f7109e2c53a81a245c394a03ac2ef",
           "path": "uv.lock"
         },
         {
@@ -22576,7 +22576,7 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "6c421281175106d15cd3178cc6f153ac9e10b3a7",
+    "commit": "a927339162a348a9e233dbe5f22be70c3c1cda0d",
     "tracked": 785
   },
   "landings": [

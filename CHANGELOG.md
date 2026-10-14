@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.4] - 2026-10-14
+
 ### Fixed
 
 - **Training works on a CPU-only machine again with a fresh install.**

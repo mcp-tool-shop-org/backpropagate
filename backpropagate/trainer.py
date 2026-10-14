@@ -2236,7 +2236,10 @@ def _build_sft_config(
 # bundled .jinja chat templates without an encoding, which fails under cp1252
 # on Windows; fixed upstream in trl 1.6.0. Drop the ``!=`` clauses when the
 # floor passes 1.6. (Anyone pinned inside the range can set ``PYTHONUTF8=1``.)
-_TRL_SUPPORTED_SPEC = ">=0.18,<2,!=1.1.*,!=1.2.*,!=1.3.*,!=1.4.*,!=1.5.*"
+# trl 1.15.0 is excluded too: its SFT loss always runs a Triton-only fused
+# LM-head kernel, which fails on a CPU-only machine (huggingface/trl#7659,
+# fixed upstream by #7669).
+_TRL_SUPPORTED_SPEC = ">=0.18,<2,!=1.1.*,!=1.2.*,!=1.3.*,!=1.4.*,!=1.5.*,!=1.15.0"
 
 
 def _config_declares(config_cls: Any, name: str) -> bool:

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Build fake credentials at runtime in CLI and logging tests so secret scanners do not flag test fixtures.
+
 ## [1.8.3] - 2026-10-04
 
 ### Fixed

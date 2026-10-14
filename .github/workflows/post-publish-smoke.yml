@@ -49,16 +49,20 @@ jobs:
         id: resolve
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Through env, never interpolated into the script: head_branch is a
+          # ref name, and a ref name may carry shell syntax.
+          INPUT_TAG: ${{ inputs.tag || '' }}
+          WORKFLOW_RUN_REF: ${{ github.event.workflow_run.head_branch }}
         shell: bash
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.tag || '' }}" ]; then
-            TAG="${{ inputs.tag }}"
+          if [ -n "${INPUT_TAG}" ]; then
+            TAG="${INPUT_TAG}"
           else
             # workflow_run triggers when Publish completes — read the
             # head_branch (which for a release-published run is the tag
             # ref). Fall back to the latest GH release if that fails.
-            TAG="${{ github.event.workflow_run.head_branch }}"
+            TAG="${WORKFLOW_RUN_REF}"
             if [ -z "${TAG}" ] || [ "${TAG}" = "main" ]; then
               TAG=$(gh release view --repo "${GITHUB_REPOSITORY}" --json tagName --jq '.tagName')
             fi

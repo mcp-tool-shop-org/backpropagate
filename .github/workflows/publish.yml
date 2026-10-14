@@ -337,17 +337,24 @@ jobs:
       - name: Resolve release version
         id: ver
         shell: bash
+        env:
+          # Through env, never interpolated into the script: head_branch is a
+          # ref name, and a ref name may carry shell syntax.
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_REF: ${{ github.event.workflow_run.head_branch }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          case "${{ github.event_name }}" in
-            workflow_run) REF="${{ github.event.workflow_run.head_branch }}";;
-            release)      REF="${{ github.event.release.tag_name }}";;
-            *)            REF="${{ inputs.tag }}";;   # workflow_dispatch backfill
+          case "${EVENT_NAME}" in
+            workflow_run) REF="${WORKFLOW_RUN_REF}";;
+            release)      REF="${RELEASE_TAG}";;
+            *)            REF="${INPUT_TAG}";;   # workflow_dispatch backfill
           esac
           V="${REF#v}"
           echo "version=${V}" >> "$GITHUB_OUTPUT"
           echo "major_minor=$(echo "$V" | cut -d. -f1-2)" >> "$GITHUB_OUTPUT"
-          echo "resolved=${V} (event=${{ github.event_name }} ref=${REF})"
+          echo "resolved=${V} (event=${EVENT_NAME} ref=${REF})"
 
       - name: Extract metadata
         id: meta

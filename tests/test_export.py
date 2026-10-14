@@ -282,7 +282,7 @@ class TestModelfile:
         either character (UNC / Windows paths) produces a well-formed
         Modelfile. We assert against the post-escape form to pin the new
         contract — a raw ``str(path)`` substring match would fail on
-        Windows where ``C:\\Users\\...`` becomes ``C:\\\\Users\\\\...``
+        Windows where ``C:\\Users\\<name>`` becomes ``C:\\\\Users\\\\<name>``
         inside the Modelfile.
         """
         from backpropagate.export import create_modelfile

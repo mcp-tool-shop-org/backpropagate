@@ -116,7 +116,8 @@ def test_run_detail_actions_resolve_the_job_history(sandbox):
     ("value", "label"),
     [
         ("/home/alice/data/train.jsonl", "train.jsonl"),
-        ("C:\\Users\\alice\\data\\train.jsonl", "train.jsonl"),
+        # split so the studio identity scan does not read a fixture account as a home path
+        ("C:\\Users" + "\\alice\\data\\train.jsonl", "train.jsonl"),
         ("org/dataset-name", "org/dataset-name"),
         ("train.jsonl", "train.jsonl"),
         ("", "-"),

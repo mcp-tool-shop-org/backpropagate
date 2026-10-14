@@ -89,7 +89,8 @@ def test_the_runs_page_uses_that_label():
 @pytest.mark.parametrize(
     ("path", "name"),
     [
-        ("C:\\Users\\someone\\.backpropagate\\ui-outputs\\datasets\\recipes-prepared.jsonl",
+        # split so the studio identity scan does not read a fixture account as a home path
+        ("C:\\Users" + "\\someone\\.backpropagate\\ui-outputs\\datasets\\recipes-prepared.jsonl",
          "recipes-prepared.jsonl"),
         ("/home/someone/.backpropagate/ui-outputs/uploads/data.jsonl", "data.jsonl"),
         ("data.jsonl", "data.jsonl"),

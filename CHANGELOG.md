@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.5] - 2026-10-14
+
+### Security
+
+- **Release workflows no longer interpolate the triggering ref into shell.**
+  `publish.yml` (Resolve release version) and `post-publish-smoke.yml`
+  (Resolve tag to smoke) put `github.event.workflow_run.head_branch`,
+  the release tag and the dispatch `tag` input straight into a `run:`
+  script, where a ref name carrying shell syntax would have run as code.
+  They now arrive through `env:` and are read as shell variables, the way
+  the Resolve release tag step already did. Closes the two critical
+  `actions/code-injection/critical` code-scanning alerts.
+
 ## [1.8.4] - 2026-10-14
 
 ### Fixed

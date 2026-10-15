@@ -52,7 +52,7 @@
           "path": ".github/dependabot.yml"
         },
         {
-          "hash": "4f1e9472ba345a6d69665dcaeb1ea9b833501a536846d5286d9bad19c4519f8e",
+          "hash": "e96399e0d4f358607d7ae55bcf8ebc56a6bae807d10ef78019eced077c9ada5c",
           "path": ".github/release-tools/package-lock.json"
         },
         {
@@ -22576,7 +22576,7 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "a927339162a348a9e233dbe5f22be70c3c1cda0d",
+    "commit": "88625c9aa7ff3bd5877a4684f7dbe3c1e040b686",
     "tracked": 785
   },
   "landings": [

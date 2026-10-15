@@ -1,14 +1,14 @@
 # backpropagate: how it works
 
-Mapped at 2026-10-14 from commit a927339 by Atlas 1.24.0.
+Mapped at 2026-10-15 from commit 88625c9 by Atlas 1.24.0.
 
 ## What this is
 
 13 parts, mostly Python (273 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.
 
-## What changed since 2026-10-14 (6c42128)
+## What changed since 2026-10-14 (a927339)
 
-Nothing structural changed since 2026-10-14; 4 files changed content.
+Nothing structural changed since 2026-10-14; 1 file changed content.
 
 ## What comes in
 
@@ -77,7 +77,7 @@ CI writes nothing this map can see.
 
 No two source files changed together often enough to name.
 
-Window: 180 days; a pair counts from 10 shared commits, since 31 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do.
+Window: 180 days; a pair counts from 3 shared commits, since the window holds fewer than 30 qualifying commits.
 
 ## What no test touches
 
@@ -93,11 +93,23 @@ No two parts export a helper that looks alike.
 
 ## Generated, never hand-edited
 
+- **.claude/** is written by mcp-tool-shop-bot[bot], which added every file in it.
+- **.github/** is written by mcp-tool-shop-bot[bot], which added every file in it.
 - **CITATION.cff** is written by scripts/prep_release.sh.
+- **assets/** is written by mcp-tool-shop-bot[bot], which added every file in it.
+- **backpropagate/** is written by mcp-tool-shop-bot[bot], which added every file in it.
+- **bin/** is written by mcp-tool-shop-bot[bot], which added every file in it.
+- **docs/** is written by mcp-tool-shop-bot[bot], which added every file in it.
+- **examples/** is written by mcp-tool-shop-bot[bot], which added every file in it.
+- **fuzz/** is written by mcp-tool-shop-bot[bot], which added every file in it.
+- **requirements/** is written by mcp-tool-shop-bot[bot], which added every file in it.
+- **the repository root** is written by mcp-tool-shop-bot[bot], which added every file in it.
+- **scripts/** is written by mcp-tool-shop-bot[bot], which added every file in it.
+- **site/** is written by mcp-tool-shop-bot[bot], which added every file in it.
 
 ## Hand-authored
 
-People write .claude/, .github/, assets/, docs/, examples/, requirements/ and site/; 13 writes with paths built at run time may land here.
+No configuration or documentation part is left to people alone.
 
 ## Where to start
 
@@ -118,5 +130,6 @@ Read those in order to follow one pull request end to end.
 - 1 write goes to a temporary directory or a path its caller passes, not to this repository.
 - There is a compose.yaml that no workflow runs; what deploys from it does so from outside this repository, and is not on this page.
 - 1 file belongs to no part: docker/fetch_bun.py.
+- Statistics confidence is low: fewer than 30 qualifying commits in the window, and fewer than 20 source files reach 10 revisions.
 
 Regenerate with `npx --yes @dogfood-lab/atlas map`.

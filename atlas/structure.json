@@ -60,7 +60,7 @@
           "path": ".github/release-tools/package.json"
         },
         {
-          "hash": "23a42a2ca9204b374cc3810406653d76476d2e55eea750b515cae12a7df08bab",
+          "hash": "141a89caad3d0a8f175f5a285cb5e11a6074e561b06bb35ba1ab033ffe9c81f7",
           "path": ".github/workflows/ci.yml"
         },
         {
@@ -88,7 +88,7 @@
           "path": ".github/workflows/post-publish-smoke.yml"
         },
         {
-          "hash": "2bb472457b03b59a6956a9499247143eff4c0bca050206c33331cfdba677e703",
+          "hash": "c512390920605af97e573ef98c0e5d4c4bed7af139a2b45760419ee413152f97",
           "path": ".github/workflows/publish.yml"
         },
         {
@@ -134,7 +134,7 @@
       "unresolvedSites": 0
     },
     {
-      "dynamicReads": 14,
+      "dynamicReads": 15,
       "dynamicSpawns": 0,
       "dynamicSpawnsInTests": 0,
       "dynamicWrites": 10,
@@ -15045,7 +15045,7 @@
       "unresolvedSites": 0
     },
     {
-      "dynamicReads": 5,
+      "dynamicReads": 4,
       "dynamicSpawns": 0,
       "dynamicSpawnsInTests": 0,
       "dynamicWrites": 3,
@@ -20840,6 +20840,13 @@
           "event": "workflow_dispatch"
         }
       ],
+      "unresolvedExpressions": [
+        {
+          "adds": "words",
+          "job": "security-summary",
+          "step": "Render security summary"
+        }
+      ],
       "uses": [
         "actions/checkout",
         "actions/download-artifact",
@@ -22574,9 +22581,9 @@
       "to": "scripts"
     }
   ],
-  "engine": "1.24.0",
+  "engine": "1.26.0",
   "generatedFrom": {
-    "commit": "88625c9aa7ff3bd5877a4684f7dbe3c1e040b686",
+    "commit": "9b93de02608e71023a59429e6cb239db2d60ed9a",
     "tracked": 785
   },
   "landings": [
@@ -22621,6 +22628,17 @@
         }
       ],
       "target": ".github/workflows",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/check_doc_drift.py",
+          "call": "read_text",
+          "confidence": "ast"
+        }
+      ],
+      "target": ".github/workflows/*.yml",
       "writers": []
     },
     {
@@ -22823,6 +22841,18 @@
         }
       ],
       "target": "backpropagate",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "tests/test_error_codes_catalog.py",
+          "call": "read_text",
+          "confidence": "ast",
+          "fromTests": true
+        }
+      ],
+      "target": "backpropagate/**/*.py",
       "writers": []
     },
     {

@@ -39,7 +39,7 @@ import os
 import re
 import sys
 from collections.abc import MutableMapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 __all__ = [
@@ -381,7 +381,7 @@ class StructuredFormatter(logging.Formatter):
         import json
 
         log_data = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),

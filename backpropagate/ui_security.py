@@ -51,7 +51,7 @@ import secrets
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path, PurePath
 from threading import Lock
 from typing import Any, Optional
@@ -1310,7 +1310,7 @@ class HealthStatus:
 
     def __post_init__(self) -> None:
         if not self.timestamp:
-            self.timestamp = datetime.now(timezone.utc).isoformat()
+            self.timestamp = datetime.now(UTC).isoformat()
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON response."""
@@ -1663,7 +1663,7 @@ class JSONSecurityFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         """Format log record as JSON."""
         log_obj = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),

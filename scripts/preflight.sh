@@ -20,7 +20,7 @@
 #   1. Drift gate                — scripts/check_doc_drift.py
 #   2. Lint                      — ruff check backpropagate/
 #   3. Type check                — mypy backpropagate/
-#   4. Tests                     — pytest (filter: not gpu / slow / integration)
+#   4. Tests                     — pytest (filter: not slow / integration / integration)
 #   5. Build                     — python -m build
 #   6. Twine + PKG-INFO smoke    — twine check + PKG-INFO grep
 #   7. Bandit gating run         — bandit -l -i (LOW/LOW floor)
@@ -113,7 +113,7 @@ fi
 # Stage 4: tests
 # ---------------------------------------------------------------------------
 
-run_gate "tests (pytest)" pytest tests/ -x --timeout=60 -m "not gpu and not slow and not integration"
+run_gate "tests (pytest)" pytest tests/ -x --timeout=60 -m "not slow and not integration"
 
 # ---------------------------------------------------------------------------
 # Stage 5: build

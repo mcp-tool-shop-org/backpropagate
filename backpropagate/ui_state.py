@@ -29,6 +29,7 @@ import os
 import re
 import tempfile
 import threading
+from datetime import UTC
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -3724,7 +3725,7 @@ class RunsState(rx.State):
         ``output_dir_override`` field on this state before calling
         ``load_runs``; the UI's settings surface will wire that in v1.3.
         """
-        from datetime import datetime, timezone
+        from datetime import datetime
         from pathlib import Path as _Path
 
         self.loading = True
@@ -3879,7 +3880,7 @@ class RunsState(rx.State):
                     "final_loss": final_loss_str,
                 })
             self.runs = trimmed
-            self.last_loaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            self.last_loaded_at = datetime.now(UTC).isoformat(timespec="seconds")
             self.last_loaded_label = _fmt_local_time()
             self._load_storage()
         finally:
@@ -4741,7 +4742,7 @@ class RunDetailState(rx.State):
         filesystem-wide write surface.
         """
         import json
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         if not self.current_run_id:
             self.action_error = "No run loaded."
@@ -4779,7 +4780,7 @@ class RunDetailState(rx.State):
             # escapes the sandbox.
             exports_dir = history_dir / "exports"
             exports_dir.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
             out_path = exports_dir / f"run-{self.current_run_id}-{stamp}.jsonl"
             with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(json.dumps(entry, default=str))
@@ -4923,7 +4924,7 @@ class ModelsState(rx.State):
         We surface one entry per ``models--*`` top-level dir; size is the
         recursive sum of all files inside.
         """
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         self.loading = True
         self.error = ""
@@ -4988,7 +4989,7 @@ class ModelsState(rx.State):
             model_rows.sort(key=lambda r: r["size_bytes"], reverse=True)
             self.models = model_rows
             self.total_size_label = _fmt_bytes(total_bytes)
-            self.last_loaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            self.last_loaded_at = datetime.now(UTC).isoformat(timespec="seconds")
             self.last_loaded_label = _fmt_local_time()
         finally:
             self.loading = False

@@ -49,11 +49,11 @@ The four commands the CI runs on every PR — run them locally before pushing an
 ```bash
 ruff check backpropagate/                                   # lint (~1s)
 mypy backpropagate/ --ignore-missing-imports                # type check (~10s)
-pytest tests/ -m "not gpu and not slow and not integration" # tests (~30s on a 16-core box)
+pytest tests/ -m "not slow and not integration" # tests (~30s on a 16-core box)
 python scripts/check_doc_drift.py                           # doc-drift gate (~1s)
 ```
 
-The full suite (`pytest tests/`) runs about 7,100 tests, a minute or two with `-n auto` (pytest-xdist); the `not gpu and not slow and not integration` filter skips ~20 GPU-bound tests that need a CUDA card. For coverage: `pytest --cov=backpropagate --cov-report=term-missing tests/` (or `html` for the rendered surface). If you just touched one file, `pytest tests/test_<that_file>.py` runs in <5 seconds.
+The full suite (`pytest tests/`) runs about 7,100 tests, a minute or two with `-n auto` (pytest-xdist); the `not slow and not integration` filter skips ~20 GPU-bound tests that need a CUDA card. For coverage: `pytest --cov=backpropagate --cov-report=term-missing tests/` (or `html` for the rendered surface). If you just touched one file, `pytest tests/test_<that_file>.py` runs in <5 seconds.
 
 The drift gate is load-bearing — it cross-checks env var names, CLI flag names, error codes, and a few specific value drifts across `backpropagate/**/*.py`, the handbook (`site/src/content/docs/handbook/*.md`), and `llms.txt`. If it fires, the message names which surface is out of sync. Per the v1.3 [[grep-all-instances-when-fixing-pattern]] doctrine, when you fix one drift instance, grep the rest of the repo for siblings — Wave 3.5 found 4 sibling drift sites across 5 handbook files via this approach.
 

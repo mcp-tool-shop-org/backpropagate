@@ -154,11 +154,12 @@ class TestStandardConfigure:
     def test_log_file_handler_receives_redacted_output(self, tmp_path, restore_root_logging):
         path = tmp_path / "out.log"
         lc_real._configure_standard_logging("INFO", json_logs=False, log_file=str(path))
-        logging.getLogger("cov.file").info("token=hf_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ok")
+        fake = "hf_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"  # built at runtime: no token-shaped literal in the source
+        logging.getLogger("cov.file").info(f"token={fake} ok")
         for h in logging.getLogger().handlers:
             h.flush()
         text = path.read_text(encoding="utf-8")
-        assert "ok" in text and "hf_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" not in text
+        assert "ok" in text and fake not in text
         assert " | INFO     | cov.file | " in text
 
     def test_json_formatter_applied_when_json_logs(self, restore_root_logging):

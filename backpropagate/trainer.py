@@ -2361,7 +2361,7 @@ def _build_orpo_config(
     # ``RUNTIME_FP8_UNSUPPORTED``), and the same shape as the CPO / KTO guards
     # below. SFT is unaffected (it imports SFTConfig/SFTTrainer separately).
     try:
-        from trl import ORPOConfig
+        from trl import ORPOConfig  # type: ignore[attr-defined]  # top-level through trl 0.28; trl.experimental after
     except ImportError:
         try:
             from trl.experimental.orpo import ORPOConfig  # type: ignore[no-redef]
@@ -2510,7 +2510,7 @@ def _build_cpo_config(
     # TrainingError (reusing RUNTIME_TRAINING_FAILED — the same code the
     # ORPO/FP8 guards use) only when BOTH miss.
     try:
-        from trl import CPOConfig
+        from trl import CPOConfig  # type: ignore[attr-defined]  # top-level through trl 0.28; trl.experimental after
     except ImportError:
         try:
             from trl.experimental.cpo import CPOConfig  # type: ignore[no-redef]

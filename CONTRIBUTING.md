@@ -15,7 +15,7 @@ If you're not sure what to pick up, start a thread in [Discussions → Ideas](ht
 
 ### Prerequisites
 
-- Python 3.10+ (3.11 is the most-tested floor; 3.10 reaches upstream EOL October 2026 and will be dropped in the first release after that)
+- Python 3.11+ (3.10 reached end of life on 2026-10-01 and was dropped in 1.9.0)
 - CUDA-capable GPU (for full testing — many tests are CPU-only and run fine on macOS / non-GPU Linux for triage)
 - Git
 

@@ -60,7 +60,7 @@
           "path": ".github/release-tools/package.json"
         },
         {
-          "hash": "23a42a2ca9204b374cc3810406653d76476d2e55eea750b515cae12a7df08bab",
+          "hash": "afea236647db7f50437189acfd984d13f134028463620a1bd9563284eaa177c7",
           "path": ".github/workflows/ci.yml"
         },
         {
@@ -84,11 +84,11 @@
           "path": ".github/workflows/pages-deploy.yml"
         },
         {
-          "hash": "ff33f0c0a507424c31d883d49e93ffe1beac16f218e318c26a0c40fd7082a643",
+          "hash": "a5d774da0271270386fe2bf5fce3a7f9afdce5d598a2ff5ef472dd2a9df5444c",
           "path": ".github/workflows/post-publish-smoke.yml"
         },
         {
-          "hash": "2bb472457b03b59a6956a9499247143eff4c0bca050206c33331cfdba677e703",
+          "hash": "c512390920605af97e573ef98c0e5d4c4bed7af139a2b45760419ee413152f97",
           "path": ".github/workflows/publish.yml"
         },
         {
@@ -134,7 +134,7 @@
       "unresolvedSites": 0
     },
     {
-      "dynamicReads": 14,
+      "dynamicReads": 15,
       "dynamicSpawns": 0,
       "dynamicSpawnsInTests": 0,
       "dynamicWrites": 10,
@@ -14910,7 +14910,7 @@
           "path": ".trivyignore"
         },
         {
-          "hash": "7eed17370ce781ef2e35981225505906d2c2a573859ab4d61426f9951206f3b2",
+          "hash": "08b3419e619b81777c96845a53987483fbc99869e091db87c48bba66260a3db0",
           "path": "CHANGELOG.md"
         },
         {
@@ -14918,7 +14918,7 @@
           "path": "CITATION.cff"
         },
         {
-          "hash": "5f8bb1266590c21611bef3c89fa4e2b397752fc0a315818316d6d3197b468f91",
+          "hash": "8291373bce97fbf6ef9c7e05513ed1cb9a66baf61055eee65f58fc5f8c006a17",
           "path": "CLAUDE.md"
         },
         {
@@ -14926,11 +14926,11 @@
           "path": "CODE_OF_CONDUCT.md"
         },
         {
-          "hash": "b58e555cae2381152d26740c65e40f989e1943da88c67bcc185841a01a1f6ced",
+          "hash": "4015911371ea9201eab220a2c8df1dcb15a3a807c09b8b1a9025cbb3169c5f34",
           "path": "CONTRIBUTING.md"
         },
         {
-          "hash": "1c23aa34aebf42a3f8f39ea6cdc7dfeeedd404001483ae918af6d5d67493bc6f",
+          "hash": "bcfd3a3edfb88c1535f235eaa9948e0ffebe4e355233a6a87ba272a159b157ce",
           "path": "Dockerfile"
         },
         {
@@ -14962,7 +14962,7 @@
           "path": "README.ja.md"
         },
         {
-          "hash": "d514d786ec38b71420df47514560ced15bafe77fa198b4f1f05df9c02b272057",
+          "hash": "0be64f273b1ffd73ce2842c96cf887a3b1911f73c40b2b24560b4aa4f5a5f70e",
           "path": "README.md"
         },
         {
@@ -14986,7 +14986,7 @@
           "path": "SECURITY_AUDIT_REPORT.md"
         },
         {
-          "hash": "e158fc20a17ddcacdbdb07b32c337776d3f0fa89241c10d312e10711edbe91ea",
+          "hash": "1cd8935c6cd8bfc234b1d69d483efc49ec1cfcc07d0e317a1d940719354ad4c4",
           "path": "SHIP_GATE.md"
         },
         {
@@ -15006,7 +15006,7 @@
           "path": "compose.yaml"
         },
         {
-          "hash": "45577e3642e6801f22795b6da8a3db485df8e046eccd7eff8fdec31700bc4589",
+          "hash": "f8bbd431610a7dc05ea4775c511f38f1fb888fbfc5b015ea5f0c26fd7580d6c4",
           "path": "llms.txt"
         },
         {
@@ -15018,15 +15018,15 @@
           "path": "osv-scanner.toml"
         },
         {
-          "hash": "2bdf6b4b2b783a82e8ef298d1789ab91d5145c817f895f37c16143bca13ef851",
+          "hash": "8dba96e6ba79e8374044b54748ba91b725a6c072d713763759a768cefdb2c4d2",
           "path": "package.json"
         },
         {
-          "hash": "3ed1947759eb55a2055454b2a442519520c8dbed754cfc508e832c74ca228834",
+          "hash": "59bfbf239fd2f8aa083810ccaa0a49ff3fa928be31f472129d318e18a32bf44f",
           "path": "pyproject.toml"
         },
         {
-          "hash": "596b79fe7822669ee9f47ca3abb461a81a8f7109e2c53a81a245c394a03ac2ef",
+          "hash": "e9ab24c9fa8d7360bd8749651594e613a4ca78b20f498feec821d78644bb41a6",
           "path": "uv.lock"
         },
         {
@@ -15045,7 +15045,7 @@
       "unresolvedSites": 0
     },
     {
-      "dynamicReads": 5,
+      "dynamicReads": 4,
       "dynamicSpawns": 0,
       "dynamicSpawnsInTests": 0,
       "dynamicWrites": 3,
@@ -15853,7 +15853,7 @@
           "path": "site/src/content.config.ts"
         },
         {
-          "hash": "780af91b9c41dd3356ba29f248b83dc4d69d53a51ec0a34d4372e87d2d91c951",
+          "hash": "49c206fdfc3a13e6510b33782fb6c0f8d7c3ebb289cafa35453bd0133048f6f1",
           "path": "site/src/content/docs/handbook/beginners.md"
         },
         {
@@ -15881,7 +15881,7 @@
           "path": "site/src/content/docs/handbook/full-fine-tuning.md"
         },
         {
-          "hash": "4640b18bc8c9fdb78cbdd7c702d973697c7db893a7ad5355c1ab27a3a2dab12e",
+          "hash": "3911a4d188594c2e7e855022e9ebfcab14f574c6b492c5d2b28373cffed46d72",
           "path": "site/src/content/docs/handbook/getting-started.md"
         },
         {
@@ -15957,7 +15957,7 @@
         },
         {
           "constantOnly": true,
-          "hash": "c057d7bcc00784b88e87beefaf742059003d473bf5568d88e47d720d22fa4f3f",
+          "hash": "59c709d211bc39ad27384e6d3a78bd1e34ea086010c34c6d391d15623b8d8114",
           "path": "site/src/site-config.ts"
         },
         {
@@ -20186,10 +20186,6 @@
             {
               "ranges": [
                 {
-                  "from": "3.10",
-                  "range": ">=3.10.0 <3.11.0-0"
-                },
-                {
                   "from": "3.11",
                   "range": ">=3.11.0 <3.12.0-0"
                 },
@@ -20838,6 +20834,13 @@
         },
         {
           "event": "workflow_dispatch"
+        }
+      ],
+      "unresolvedExpressions": [
+        {
+          "adds": "words",
+          "job": "security-summary",
+          "step": "Render security summary"
         }
       ],
       "uses": [
@@ -21593,10 +21596,6 @@
           "setup": [
             {
               "ranges": [
-                {
-                  "from": "3.10",
-                  "range": ">=3.10.0 <3.11.0-0"
-                },
                 {
                   "from": "3.11",
                   "range": ">=3.11.0 <3.12.0-0"
@@ -22574,9 +22573,9 @@
       "to": "scripts"
     }
   ],
-  "engine": "1.24.0",
+  "engine": "1.26.0",
   "generatedFrom": {
-    "commit": "88625c9aa7ff3bd5877a4684f7dbe3c1e040b686",
+    "commit": "9b93de02608e71023a59429e6cb239db2d60ed9a",
     "tracked": 785
   },
   "landings": [
@@ -22621,6 +22620,17 @@
         }
       ],
       "target": ".github/workflows",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/check_doc_drift.py",
+          "call": "read_text",
+          "confidence": "ast"
+        }
+      ],
+      "target": ".github/workflows/*.yml",
       "writers": []
     },
     {
@@ -22823,6 +22833,18 @@
         }
       ],
       "target": "backpropagate",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "tests/test_error_codes_catalog.py",
+          "call": "read_text",
+          "confidence": "ast",
+          "fromTests": true
+        }
+      ],
+      "target": "backpropagate/**/*.py",
       "writers": []
     },
     {

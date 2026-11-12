@@ -7,7 +7,7 @@ sidebar:
 
 ## Prerequisites
 
-- Python 3.10+
+- Python 3.11+
 - An NVIDIA GPU with CUDA. 8 GB trains the 1B to 3B presets, 16 GB a 7B, 32 GB up to 32B with QLoRA.
 - PyTorch 2.0+
 

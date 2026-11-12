@@ -79,7 +79,7 @@ export const config: SiteConfig = {
       cards: [
         {
           title: 'Install',
-          code: '# Recommended\npip install backpropagate[standard]\n\n# Minimal core only\npip install backpropagate\n\n# All extras\npip install backpropagate[full]\n\n# Requires: Python 3.10+ · CUDA GPU (8GB+ VRAM)',
+          code: '# Recommended\npip install backpropagate[standard]\n\n# Minimal core only\npip install backpropagate\n\n# All extras\npip install backpropagate[full]\n\n# Requires: Python 3.11+ · CUDA GPU (8GB+ VRAM)',
         },
         {
           title: 'Basic training',

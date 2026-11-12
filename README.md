@@ -353,9 +353,9 @@ Filesystem writes from the UI are sandboxed to a single directory:
 
 ## Platform notes
 
-**Requirements:** Python 3.10+ · NVIDIA GPU with CUDA · PyTorch 2.0+. An 8 GB card trains the 1B to 3B presets, 16 GB a 7B, and 32 GB up to 32B with QLoRA.
+**Requirements:** Python 3.11+ · NVIDIA GPU with CUDA · PyTorch 2.0+. An 8 GB card trains the 1B to 3B presets, 16 GB a 7B, and 32 GB up to 32B with QLoRA.
 
-Python 3.10 is supported through at least v1.6; it reaches upstream end-of-life in October 2026 and is scheduled for removal in the first release after that. For new installs, prefer Python 3.11 or 3.12 — 3.11 is the most-tested floor.
+Python 3.10 is no longer supported (end of life 2026-10-01); the minimum is 3.11 as of v1.9.0. Python 3.11 is the most-tested floor.
 
 Backpropagate handles the runtime quirks of training on different platforms, but it can't fix install-time problems. The two most common are:
 

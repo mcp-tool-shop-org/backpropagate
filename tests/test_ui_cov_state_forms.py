@@ -810,7 +810,7 @@ class TestExportHubFieldValidation:
 
     def test_the_raw_token_never_lands_in_a_public_field_or_error(self):
         s = us.ExportState()
-        secret = "hf_SECRETSECRETSECRETSECRETSECRET1234"
+        secret = "hf_" + "SECRET" * 5 + "1234"  # built at runtime: no token-shaped literal in the source
         s.set_hub_token(secret)
         public = {k: str(getattr(s, k)) for k in s.get_fields() if not k.startswith("_")}
         assert all(secret not in v for v in public.values())

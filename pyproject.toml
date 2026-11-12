@@ -8,11 +8,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "backpropagate"
-version = "1.8.5"
+version = "1.9.0"
 description = "Production-ready headless LLM fine-tuning with smart defaults, Windows support, and modular architecture"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     { name = "mcp-tool-shop", email = "64996768+mcp-tool-shop@users.noreply.github.com" }
 ]
@@ -34,7 +34,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -65,21 +64,23 @@ classifiers = [
 #     0.28, KTOConfig by 0.27.2; trainer.py passes a field only when the
 #     installed config declares it). Real ORPO/SimPO/KTO training passed on trl
 #     0.24.0, 0.27.2 and 1.13.0 (RTX 5090, 2026-09-23). The [unsloth] extra
-#     still holds unsloth installs at trl<=0.24.0, unsloth's own cap, restated
+#     still holds unsloth installs at trl<=1.15.0, unsloth's own cap, restated
 #     there; this wider range is for installs without it. `_TRL_SUPPORTED_SPEC`
 #     in trainer.py is this range, and a test keeps the two equal.
-#   - unsloth FLOOR `>=2026.6.8` + the four caps beside it in the [unsloth]
+#   - unsloth FLOOR `>=2026.11.4` + the four caps beside it in the [unsloth]
 #     extra: the same doctrine, run from the other end. Every current unsloth
-#     caps its own stack (2026.9.11: torch<2.13, transformers<=5.5.0,
-#     trl<=0.24.0, datasets<4.4.0), while releases up to 2026.3.5 cap nothing
+#     caps its own stack (2026.11.4: torch<2.15.0, transformers<=5.17.0,
+#     trl<=1.15.0, datasets<5.0.0 with 4.4.* excluded; moved from 2026.9.11's
+#     torch<2.13 / transformers<=5.5.0 / trl<=0.24.0 / datasets<4.4.0 on
+#     2026-11-12 to clear Trivy findings held by the old caps), while releases up to 2026.3.5 cap nothing
 #     on torch. Under the old `>=2024.1` floor a resolver satisfied a newer
 #     torch/transformers/trl by walking unsloth BACK past those caps instead
 #     of refusing. Measured 2026-09-23: pip's `.[dev,full]` install on every CI
 #     cell took unsloth 2025.11.1 + torch 2.14.0 + transformers 4.57.2 — a 4.x
 #     transformers under a 5.x lock, after backtracking 102 unsloth releases —
 #     and Dependabot re-locks walked unsloth back 3-12 months (#173, #194,
-#     #210, all closed). 2026.6.8 is the unsloth uv.lock pins and the GPU dev
-#     rig runs; below it a resolver now has to refuse.
+#     #210, all closed). 2026.11.4 is the floor since 2026-11-12 (was 2026.6.8);
+#     below it a resolver now has to refuse.
 #     The four caps RESTATE unsloth's own. pip otherwise commits to the newest
 #     torch/transformers/trl/datasets before it reads unsloth's metadata and
 #     then thrashes: with the floor alone it backtracked 41 unsloth releases and
@@ -116,13 +117,14 @@ dependencies = [
 [project.optional-dependencies]
 # Individual feature groups - install only what you need
 unsloth = [
-    "unsloth>=2026.6.8",  # Unsloth for 2x faster training
+    "unsloth>=2026.11.4",  # Unsloth for 2x faster training
     # unsloth's own caps, restated so pip reads them before it commits to
     # newer versions. Floor + caps move together: CIDOCS-B-103 above.
-    "torch<2.13",
-    "transformers<=5.5.0",
-    "trl<=0.24.0",
-    "datasets<4.4.0",
+    # Mirrors unsloth 2026.11.4's requires_dist (PyPI, read 2026-11-12).
+    "torch<2.15.0",
+    "transformers!=4.53.0,!=4.54.0,!=4.55.0,!=4.55.1,!=4.57.0,!=4.57.4,!=4.57.5,!=5.0.0,!=5.1.0,<=5.17.0",
+    "trl!=0.19.0,<=1.15.0",
+    "datasets!=4.0.*,!=4.1.0,!=4.4.*,!=4.5.0,<5.0.0",
 ]
 ui = [
     "reflex>=0.9.12,<0.10",  # Reflex (Radix UI, FastAPI under the hood) - migrated from Gradio in v1.1.0
@@ -251,7 +253,7 @@ include = [
 ]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
@@ -294,7 +296,7 @@ ignore = [
 known-first-party = ["backpropagate"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true

@@ -47,7 +47,7 @@ location.
 
 ### Pre-commit hook (v1.4 next step)
 
-v1.3 ships CI-only. The script is stdlib-only (Python 3.10+) so a
+v1.3 ships CI-only. The script is stdlib-only (Python 3.11+) so a
 pre-commit-friendly hook is a one-line wrapper away — wire under
 `.pre-commit-config.yaml` once we adopt pre-commit in the repo. Until
 then, run manually before opening a PR you want green on the first push.

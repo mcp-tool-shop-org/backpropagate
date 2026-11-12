@@ -20,7 +20,7 @@
 #
 # --universal           one file valid on every OS / Python (markers kept), so
 #                       the same file serves the Linux and Windows CI cells.
-# --python-version 3.10 resolve for the floor of requires-python, so nothing
+# --python-version 3.11 resolve for the floor of requires-python, so nothing
 #                       in the file needs a newer interpreter than CI's oldest.
 # --generate-hashes     the whole point.
 #
@@ -33,8 +33,8 @@ uv_run() { uvx --from "uv@${UV_VERSION}" uv "$@"; }
 
 compile_universal() {
   local name="$1"
-  UV_CUSTOM_COMPILE_COMMAND="requirements/compile.sh ${name}  (uv ${UV_VERSION}: uv pip compile requirements/${name}.in --universal --python-version 3.10 --generate-hashes)" \
-    uv_run pip compile "requirements/${name}.in" --universal --python-version 3.10 \
+  UV_CUSTOM_COMPILE_COMMAND="requirements/compile.sh ${name}  (uv ${UV_VERSION}: uv pip compile requirements/${name}.in --universal --python-version 3.11 --generate-hashes)" \
+    uv_run pip compile "requirements/${name}.in" --universal --python-version 3.11 \
       --generate-hashes -o "requirements/${name}.txt"
 }
 

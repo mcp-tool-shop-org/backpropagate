@@ -706,6 +706,8 @@ def _auth_credential(value: str) -> str:
 #   "Authorization: Bearer xyz"      → "Authorization: Bearer <REDACTED>"
 #   "api_key=EXAMPLE-NOT-A-REAL-KEY"   → "api_key=<REDACTED>"
 #   "password=hunter2!@#secret_key"  → "password=<REDACTED>"
+from datetime import UTC
+
 from .logging_config import (  # noqa: E402
     SECRET_PATTERNS as _SECRET_PATTERNS,  # noqa: F401 — re-export for tests/back-compat
 )
@@ -5153,7 +5155,7 @@ def _build_runs_payload(
         "output_dir": <str>, "runs": [...]}`` where each run dict has a
         stable set of fields suitable for table rendering.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     projected: list[dict[str, Any]] = []
     for entry in runs:
@@ -5202,7 +5204,7 @@ def _build_runs_payload(
 
     return {
         "schema_version": RUNS_JSON_SCHEMA_VERSION,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "output_dir": str(output_dir),
         "runs": projected,
     }

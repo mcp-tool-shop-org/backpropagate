@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-12
+
+### Changed
+
+- **Breaking: Python 3.10 is no longer supported (end of life 2026-10-01). Minimum is 3.11.** Pillow 13.0.0 (five critical CVEs fixed) and certifi updated. CI test matrix is now 3.11 and 3.13 (3.11 is the floor and the ruff, mypy and Atlas cell; 3.12 runs in `parallel-xdist`); ruff target is py311 and mypy python_version is 3.11.
+
 ## [1.8.5] - 2026-10-14
 
 ### Security

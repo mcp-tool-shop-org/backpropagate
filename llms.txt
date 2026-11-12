@@ -80,7 +80,7 @@ Full reference: https://mcp-tool-shop-org.github.io/backpropagate/handbook/env-v
 
 ## Constraints
 - Requires CUDA GPU (8GB+ VRAM recommended); CPU-only not supported; macOS unsupported for training
-- Python 3.10+, PyTorch 2.0+
+- Python 3.11+, PyTorch 2.0+
 - Modular installs: `[unsloth]`, `[ui]`, `[validation]`, `[export]`, `[monitoring]`, `[standard]`, `[full]`
 - Windows auto-fixes: pre-tokenization, xformers disable for RTX 40/50 series, dataloader_num_workers=0; train_on_responses auto-disabled on Windows (multiprocessing)
 - Dataset formats (auto-detected): ShareGPT (`conversations` with `from`/`value`), Alpaca (`instruction`/`output`), OpenAI chat (`messages`), ChatML, JSONL with `text` field, raw text, or any HuggingFace dataset name

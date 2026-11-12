@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "pins": {
+    "06869d4add4c38e5:ja": {
+      "lang": "ja",
+      "source": "Backpropagate fine-tunes large language models on a **single** GPU, sized for the card you actually have. Three lines of Python QLoRA a 7B–32B model on one 32 GB consumer card (RTX 5090). One flag, `--full-ft-offload`, full-fine-tunes a 7B-class model by keeping its weights and gradients in host RAM (Linux or WSL2; slow, and measured below). One more command exports to Ollama, then `ollama run` your finetune. Scales down to 16 GB. First-class on Windows. Prefer a browser to Python? `backprop ui` does all of it with no code ([take the tour](https://mcp-tool-shop-org.github.io/backpropagate/handbook/web-ui/)).",
+      "translation": "Backpropagateは、実際に使用しているGPUに合わせてサイズ調整された、**単一の**GPUで大規模言語モデルの微調整を行います。わずか3行のPythonコードQLoRAで、7B～32Bのモデルを1つの32GBのコンシューマー向けGPU（RTX 5090）で実行できます。1つのフラグ`--full-ft-offload`を使用すると、モデルの重みと勾配をホストRAM（LinuxまたはWSL2）に保持することで、7Bクラスのモデルを完全に微調整できます（速度は遅く、後述します）。さらに1つのコマンドでOllamaにエクスポートし、その後`ollama run`で微調整したモデルを使用します。16GBまでスケールダウンできます。Windows環境でも最適に動作します。Pythonの代わりにブラウザを使用したいですか？`backprop ui`を使用すれば、コードなしでこれらすべてを実行できます（[ツアーはこちら](https://mcp-tool-shop-org.github.io/backpropagate/handbook/web-ui/)）。",
+      "pinnedAt": "2026-11-12T11:39:15.778Z"
+    },
+    "16f584fb3be7f43e:fr": {
+      "lang": "fr",
+      "source": "**Fits:** 26.0 GiB peak at 2048 context (27.2 GiB reserved, about 4 GiB to spare).",
+      "translation": "**S’adapte :** 26.0 GiB pic à 2048 de contexte (27.2 GiB réservés, environ 4 GiB d’espace libre).",
+      "pinnedAt": "2026-11-12T11:39:15.957Z"
+    },
+    "4839e15c6ba3d5ed:ja": {
+      "lang": "ja",
+      "source": "8B QLoRA, 128K native context (the >700M-MAU clause needs a separate Meta license).",
+      "translation": "8B QLoRA、128K のネイティブコンテキスト（700M MAU を超える場合は、別途 Meta のライセンスが必要です）。",
+      "pinnedAt": "2026-11-12T11:39:15.786Z"
+    },
+    "6fbbce27c7fc6c27:hi": {
+      "lang": "hi",
+      "source": "- **Full-parameter fine-tuning of 13B+ models** — Backpropagate full-fine-tunes up to about 6B on a 32 GB GPU and a 7B-class model with `--full-ft-offload` (see [the envelope](#what-you-can-fine-tune-on-one-gpu)). A full fine-tune of a 13B+ model wants multi-GPU FSDP or a bigger card. Before spending that compute, weigh the evidence both ways. [Thinking Machines 2025](https://thinkingmachines.ai/blog/lora/) reports LoRA matching full fine-tuning when it is applied to every layer and the dataset fits the adapter's capacity, at about two-thirds of the compute per pass. [Biderman et al. 2024](https://arxiv.org/abs/2405.09673) found that in standard low-rank settings LoRA substantially underperforms full fine-tuning on code and math, while forgetting less. For instruction-following, persona and style work on modest datasets, QLoRA up to 32B is usually the better use of one card.\n- **Online RL — PPO / GRPO / RLVR** — Backpropagate does single-stage SFT plus reference-free preference tuning (ORPO in v1.5; SimPO + KTO in v1.6). What it does *not* do is online reinforcement learning — PPO, GRPO, or RLVR — which needs a reward model or a generation-and-scoring loop on top of the training step. For those, use TRL directly or LLaMA-Factory. (Reference-free preference tuning fits the single-stage envelope because there's no separate reference model to hold in memory; see the ORPO note under [Quick Start](#quick-start).)\n- **Multi-node training** — single GPU on one machine only. Multi-GPU on one machine works (via `accelerate launch`) but isn't officially supported.\n- **macOS training on the CUDA rail** — Apple Silicon doesn't have CUDA, so the CUDA path runs on a Linux or Windows box with an NVIDIA GPU. You can still run the trained model on a Mac via Ollama. An **experimental, unverified-preview** MLX rail (`--backend mlx`) trains a LoRA adapter natively on Apple Silicon — see [Apple Silicon (MLX)](#apple-silicon-mlx--unverified-preview). It is LoRA-SFT-only and **not dogfood-verified on real silicon** (no support), so for anything beyond a LoRA SFT (ORPO, full fine-tune, FP8, multi-run) you want the CUDA rail.\n- **Anything outside the tested model families** — Qwen 2.5 / 3.5 (7B / 4B), Phi-4-mini-3.8B, SmolLM3-3B, Llama 3.2 (3B / 1B), Mistral 7B. Other models often work but aren't pinned in CI.",
+      "translation": "- **13बी+ मॉडल का पूर्ण-पैरामीटर फाइन-ट्यूनिंग** - बैकप्रोपगेट 32 जीबी जीपीयू पर लगभग 6बी तक और `--full-ft-offload` के साथ 7बी-क्लास मॉडल का पूर्ण फाइन-ट्यून करता है ([एनवेलप](#what-you-can-fine-tune-on-one-gpu) देखें)। 13बी+ मॉडल का पूर्ण फाइन-ट्यून मल्टी-जीपीयू एफएसडीपी या एक बड़े कार्ड की मांग करता है। उस कंप्यूट पर खर्च करने से पहले, दोनों तरीकों से सबूतों का मूल्यांकन करें। [थिंकिंग मशीन्स 2025](https://thinkingmachines.ai/blog/lora/) रिपोर्ट करता है कि जब इसे प्रत्येक परत पर लागू किया जाता है और डेटासेट एडेप्टर की क्षमता के अनुरूप होता है, तो लगभग दो-तिहाई कंप्यूट प्रति पास के साथ, LoRA पूर्ण फाइन-ट्यूनिंग से मेल खाता है। [बिडरमैन एट अल. 2024](https://arxiv.org/abs/2405.09673) ने पाया कि मानक कम-रैंक सेटिंग्स LoRA में कोड और गणित पर पूर्ण फाइन-ट्यूनिंग की तुलना में काफी कम प्रदर्शन करते हैं, जबकि कम भूलते हैं। निर्देश-अनुसरण, व्यक्तित्व और मामूली डेटासेट पर शैली के लिए, QLoRA 32बी तक आमतौर पर एक कार्ड का बेहतर उपयोग है।\n- **ऑनलाइन आरएल - पीपीओ / जीआरपीओ / आरएलवीआर** - बैकप्रोपगेट सिंगल-स्टेज एसएफटी प्लस संदर्भ-मुक्त प्राथमिकता ट्यूनिंग (ओआरपीओ v1.5 में; SimPO + केटीओ v1.6 में) करता है। यह जो नहीं करता है वह है ऑनलाइन सुदृढीकरण सीखना - पीपीओ, जीआरपीओ, या आरएलवीआर - जिसके लिए एक इनाम मॉडल या प्रशिक्षण चरण के शीर्ष पर एक पीढ़ी-और-स्कोरिंग लूप की आवश्यकता होती है। उनके लिए, सीधे टीआरएल का उपयोग करें या LLaMA-Factory। (संदर्भ-मुक्त प्राथमिकता ट्यूनिंग सिंगल-स्टेज एनवेलप के अनुरूप है क्योंकि स्मृति में रखने के लिए कोई अलग संदर्भ मॉडल नहीं है; [क्विक स्टार्ट](#त्वरित-शुरुआत) के तहत ओआरपीओ नोट देखें)।\n- **मल्टी-नोड प्रशिक्षण** - केवल एक मशीन पर सिंगल जीपीयू। एक मशीन पर मल्टी-जीपीयू काम करता है (`accelerate launch` के माध्यम से) लेकिन आधिकारिक तौर पर समर्थित नहीं है।\n- **CUDA रेल पर macOS प्रशिक्षण** - ऐप्पल सिलिकॉन में CUDA नहीं है, इसलिए CUDA पथ एक लिनक्स या विंडोज बॉक्स पर NVIDIA जीपीयू के साथ चलता है। आप प्रशिक्षित मॉडल को ओलामा के माध्यम से मैक पर भी चला सकते हैं। एक **प्रायोगिक, अप्रमाणित-पूर्वावलोकन** एमएलएक्स रेल (`--backend mlx`) ऐप्पल सिलिकॉन पर मूल रूप से LoRA एडेप्टर को प्रशिक्षित करता है - [एप्पल सिलिकॉन (MLX)](#एप्पल-सिलिकॉन-mlx---अप्रमाणित-पूर्वावलोकन) देखें। यह LoRA-SFT-केवल है और **वास्तविक सिलिकॉन पर डॉगफूड-प्रमाणित नहीं है** (कोई समर्थन नहीं), इसलिए LoRA एसएफटी (ओआरपीओ, पूर्ण फाइन-ट्यून, FP8, मल्टी-रन) से परे किसी भी चीज़ के लिए आप CUDA रेल चाहते हैं।\n- **परीक्षण किए गए मॉडल परिवारों के बाहर कुछ भी** - क्वेन 2.5 / 3.5 (7बी / 4बी), Phi-4-mini-3.8B, SmolLM3-3B, लामा 3.2 (3बी / 1बी), मिस्ट्रल 7बी। अन्य मॉडल अक्सर काम करते हैं लेकिन सीआई में पिन नहीं किए जाते हैं।",
+      "pinnedAt": "2026-11-12T11:39:16.106Z"
+    },
+    "7ac9d7a728093b58:fr": {
+      "lang": "fr",
+      "source": "22.8 GiB peak at 4096 context (24.2 GiB reserved).",
+      "translation": "22.8 GiB pic à 4096 de contexte (24.2 GiB réservés).",
+      "pinnedAt": "2026-11-12T11:39:15.957Z"
+    },
+    "b39e0c83507a3d27:fr": {
+      "lang": "fr",
+      "source": "**18.7 GiB** peak at 4096 context (20.0 GiB reserved).",
+      "translation": "**18.7 GiB** pic à 4096 de contexte (20.0 GiB réservés).",
+      "pinnedAt": "2026-11-12T11:39:15.956Z"
+    },
+    "b68a9f19510adbd4:zh": {
+      "lang": "zh",
+      "source": "Pass `--auth user:password`, or use SSH port-forwarding instead (see [Web UI](#web-ui)).",
+      "translation": "传递 `--auth user:password`，或使用 SSH 端口转发（参见 [Web UI](#web-ui)）。",
+      "pinnedAt": "2026-11-12T11:39:15.652Z"
+    },
+    "f94a0ca4d53251ad:fr": {
+      "lang": "fr",
+      "source": "The [bug report template](https://github.com/mcp-tool-shop-org/backpropagate/issues/new?template=bug_report.yml) prompts for each of these explicitly so triage moves fast. Questions, ideas, or \"is this expected?\" threads belong in [GitHub Discussions](https://github.com/mcp-tool-shop-org/backpropagate/discussions). Security issues should be reported privately via the [GitHub Security Advisory](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/new) form — see [SECURITY.md](SECURITY.md) for the policy and response timelines.",
+      "translation": "Le [modèle de signalement de bogue](https://github.com/mcp-tool-shop-org/backpropagate/issues/new?template=bug_report.yml) demande explicitement chacun de ces éléments afin d’accélérer le processus de triage. Les questions, les idées ou les discussions sur le fait de savoir si quelque chose est normal doivent être publiées dans [GitHub Discussions](https://github.com/mcp-tool-shop-org/backpropagate/discussions). Les problèmes de sécurité doivent être signalés en privé via le [GitHub Security Advisory](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/new) — consultez [SECURITY.md](SECURITY.md) pour connaître la politique et les délais de réponse.",
+      "pinnedAt": "2026-11-12T11:39:15.961Z"
+    },
+    "f94a0ca4d53251ad:it": {
+      "lang": "it",
+      "source": "The [bug report template](https://github.com/mcp-tool-shop-org/backpropagate/issues/new?template=bug_report.yml) prompts for each of these explicitly so triage moves fast. Questions, ideas, or \"is this expected?\" threads belong in [GitHub Discussions](https://github.com/mcp-tool-shop-org/backpropagate/discussions). Security issues should be reported privately via the [GitHub Security Advisory](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/new) form — see [SECURITY.md](SECURITY.md) for the policy and response timelines.",
+      "translation": "Il [modello per la segnalazione di bug](https://github.com/mcp-tool-shop-org/backpropagate/issues/new?template=bug_report.yml) richiede esplicitamente tutte queste informazioni, in modo da velocizzare il processo di analisi e risoluzione. Domande, idee o discussioni del tipo «è questo il comportamento previsto?» devono essere pubblicate in [GitHub Discussions](https://github.com/mcp-tool-shop-org/backpropagate/discussions). I problemi di sicurezza devono essere segnalati in privato tramite il modulo [GitHub Security Advisory](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/new); per la politica e i tempi di risposta, consultare il file [SECURITY.md](SECURITY.md).",
+      "pinnedAt": "2026-11-12T11:39:16.309Z"
+    }
+  }
+}

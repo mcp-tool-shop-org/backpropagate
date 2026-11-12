@@ -4332,10 +4332,7 @@ class TestOrpoTrlImportGuard:
 
         from backpropagate import trainer as trainer_mod
 
-        try:
-            import tomllib
-        except ModuleNotFoundError:  # Python 3.10 — pytest depends on tomli
-            import tomli as tomllib
+        import tomllib
 
         pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
         deps = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"][

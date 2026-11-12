@@ -25,12 +25,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-# tomllib is 3.11+ stdlib; fall back to tomli on 3.10, matching the idiom
-# scripts/check_doc_drift.py already uses.
-try:
-    import tomllib  # type: ignore[import-not-found]
-except ImportError:  # pragma: no cover - only taken on 3.10
-    import tomli as tomllib  # type: ignore[no-redef,import-not-found]
+import tomllib  # stdlib since Python 3.11 (the project floor)
 
 REPO = Path(__file__).resolve().parent.parent
 

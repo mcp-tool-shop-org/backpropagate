@@ -65,7 +65,7 @@ Usage
 
 Exit 0 ⇒ no drift; exit 1 ⇒ drift detected (report written to stdout).
 
-The script is stdlib-only (Python 3.10+) — no extra deps so it can run as
+The script is stdlib-only (Python 3.11+) — no extra deps so it can run as
 the first CI step on a stock setup-python action.
 
 Pre-commit
@@ -84,13 +84,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-# tomllib is Python 3.11+ stdlib; fall back to tomli on 3.10 (tomli is a
-# transitive dep via multiple packages in uv.lock with marker
-# python_full_version < '3.11', so it's guaranteed available on 3.10).
-try:
-    import tomllib  # type: ignore[import-not-found]
-except ImportError:  # Python 3.10
-    import tomli as tomllib  # type: ignore[no-redef,import-not-found]
+import tomllib  # stdlib since Python 3.11 (the project floor)
 
 REPO_ROOT = Path(__file__).parent.parent
 SOURCE_ROOT = REPO_ROOT / "backpropagate"

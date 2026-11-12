@@ -152,7 +152,7 @@ jobs:
           #
           # Every other cell (and every other job in this file) installs
           # `[dev,full]`, and `full` includes `unsloth`, which holds trl at
-          # <=0.24.0. A plain `pip install backpropagate` has no such hold: it
+          # <=1.15.0 (it was <=0.24.0 until unsloth 2026.11.4). A plain `pip install backpropagate` has no such hold: it
           # resolves a different trl (0.27.x today, 1.x once the cap lifts),
           # and that is where a KTO `TypeError` lived undetected -- CI never
           # installed the stack those users get, so the bug could only be

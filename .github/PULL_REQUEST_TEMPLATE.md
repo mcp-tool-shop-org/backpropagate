@@ -25,7 +25,7 @@ a PR is opened. -->
 
 - [ ] `ruff check backpropagate/`
 - [ ] `mypy backpropagate/ --ignore-missing-imports`
-- [ ] `pytest tests/ -m "not gpu and not slow and not integration"`
+- [ ] `pytest tests/ -m "not slow and not integration"`
 - [ ] `python scripts/check_doc_drift.py`
 - [ ] Targeted regression set (name which tests/files exercise the change)
 

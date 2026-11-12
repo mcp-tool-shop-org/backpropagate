@@ -1,16 +1,14 @@
 # backpropagate: how it works
 
-Mapped at 2026-11-11 from commit 9b93de0 by Atlas 1.26.0.
+Mapped at 2026-11-12 from commit 0630a57 by Atlas 1.26.0.
 
 ## What this is
 
 13 parts, mostly Python (273 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.
 
-## What changed since 2026-10-15 (88625c9)
+## What changed since 2026-11-11 (9b93de0)
 
-- .github/workflows/*.yml is now read by scripts/check_doc_drift.py.
-- backpropagate/**/*.py is now read by tests/test_error_codes_catalog.py.
-- 2 files changed content, across 1 part.
+Nothing structural changed since 2026-11-11; 4 files changed content.
 
 ## What comes in
 

@@ -113,7 +113,7 @@ fi
 # Stage 4: tests
 # ---------------------------------------------------------------------------
 
-run_gate "tests (pytest)" pytest tests/ -x --timeout=60 -m "not gpu and not slow and not integration"
+run_gate "tests (pytest)" pytest tests/ -x --timeout=60 -m "not slow and not integration"
 
 # ---------------------------------------------------------------------------
 # Stage 5: build

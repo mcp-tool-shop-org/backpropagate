@@ -272,7 +272,7 @@ jobs:
 
       - name: Atlas check
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
-        run: npx --yes @dogfood-lab/atlas@1.24.0 check
+        run: npx --yes @dogfood-lab/atlas@1.26.0 check
 
       # RUFF AND MYPY RUN ON THE FLOOR CELL ONLY, and the condition is the fix
       # for a month of red CI -- not an optimization bolted onto a green build.
@@ -362,7 +362,7 @@ jobs:
             PARALLEL_FLAGS="-n auto --dist worksteal"
             echo "::notice::pytest-xdist enabled (BACKPROPAGATE_PYTEST_PARALLEL=1)"
           fi
-          pytest tests/ -v --tb=short ${PARALLEL_FLAGS} -m "not gpu and not slow and not integration"
+          pytest tests/ -v --tb=short ${PARALLEL_FLAGS} -m "not slow and not integration"
 
       - name: Run tests with coverage
         id: tests
@@ -388,7 +388,7 @@ jobs:
             PARALLEL_FLAGS="-n auto --dist worksteal"
             echo "::notice::pytest-xdist enabled (BACKPROPAGATE_PYTEST_PARALLEL=1)"
           fi
-          pytest tests/ --cov=backpropagate --cov-report=xml --cov-fail-under="${COV_FLOOR}" ${PARALLEL_FLAGS} -m "not gpu and not slow and not integration" --junitxml=junit.xml
+          pytest tests/ --cov=backpropagate --cov-report=xml --cov-fail-under="${COV_FLOOR}" ${PARALLEL_FLAGS} -m "not slow and not integration" --junitxml=junit.xml
 
       # The codecov job below uploads what these two steps save; this job
       # never holds an OIDC token. Coverage is saved when the tests passed,
@@ -428,7 +428,7 @@ jobs:
             PARALLEL_FLAGS="-n auto --dist worksteal"
             echo "::notice::pytest-xdist enabled (BACKPROPAGATE_PYTEST_PARALLEL=1)"
           fi
-          pytest tests/ -v --tb=short ${PARALLEL_FLAGS} -m "not gpu and not slow and not integration"
+          pytest tests/ -v --tb=short ${PARALLEL_FLAGS} -m "not slow and not integration"
 
   codecov:
     # Uploads what the test job saved, from a job of its own, so the OIDC
@@ -540,7 +540,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "::notice::pytest-xdist forced ON (BACKPROPAGATE_PYTEST_PARALLEL=1) — exercising serial-group scheduling"
-          pytest tests/ -v --tb=short -n auto --dist worksteal -m "not gpu and not slow and not integration"
+          pytest tests/ -v --tb=short -n auto --dist worksteal -m "not slow and not integration"
 
   # CIDOCS-F-023 (v1.4 Wave 6a) — uv sync --frozen pilot.
   #
@@ -599,7 +599,7 @@ jobs:
           set -euo pipefail
           # Run inside the uv-managed venv. `uv run` activates the right
           # interpreter without a manual `source .venv/bin/activate` step.
-          uv run pytest tests/ -v --tb=short -m "not gpu and not slow and not integration"
+          uv run pytest tests/ -v --tb=short -m "not slow and not integration"
 
   # UICOMPILE-A (v1.5 Stage A) — Reflex dry-run compile smoke.
   #

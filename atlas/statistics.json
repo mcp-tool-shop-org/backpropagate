@@ -185,7 +185,7 @@
       "confidence": "low",
       "highWater": null,
       "name": "scripts",
-      "qualifyingSourceCommits": 18,
+      "qualifyingSourceCommits": 19,
       "rebaseline": null
     },
     {
@@ -217,7 +217,7 @@
       "confidence": "full",
       "highWater": null,
       "name": "tests",
-      "qualifyingSourceCommits": 103,
+      "qualifyingSourceCommits": 105,
       "rebaseline": null
     }
   ],
@@ -275,8 +275,8 @@
         "path": ".github/release-tools/package.json"
       },
       {
-        "commits": 64,
-        "lines": 3653,
+        "commits": 63,
+        "lines": 3655,
         "path": ".github/workflows/ci.yml"
       },
       {
@@ -340,6 +340,11 @@
         "path": ".npmignore"
       },
       {
+        "commits": 1,
+        "lines": 59,
+        "path": ".polyglot-pins.json"
+      },
+      {
         "commits": 2,
         "lines": 38,
         "path": ".pre-commit-config.yaml"
@@ -370,7 +375,7 @@
         "path": "CODE_OF_CONDUCT.md"
       },
       {
-        "commits": 15,
+        "commits": 14,
         "lines": 168,
         "path": "CONTRIBUTING.md"
       },
@@ -385,28 +390,28 @@
         "path": "PRODUCTION_READINESS_AUDIT.md"
       },
       {
-        "commits": 22,
-        "lines": 3136,
+        "commits": 23,
+        "lines": 3400,
         "path": "README.es.md"
       },
       {
-        "commits": 22,
-        "lines": 3054,
+        "commits": 23,
+        "lines": 3318,
         "path": "README.fr.md"
       },
       {
-        "commits": 22,
-        "lines": 3052,
+        "commits": 23,
+        "lines": 3336,
         "path": "README.hi.md"
       },
       {
-        "commits": 22,
-        "lines": 3740,
+        "commits": 23,
+        "lines": 4006,
         "path": "README.it.md"
       },
       {
-        "commits": 22,
-        "lines": 3394,
+        "commits": 23,
+        "lines": 3688,
         "path": "README.ja.md"
       },
       {
@@ -415,13 +420,13 @@
         "path": "README.md"
       },
       {
-        "commits": 22,
-        "lines": 2904,
+        "commits": 23,
+        "lines": 3172,
         "path": "README.pt-BR.md"
       },
       {
-        "commits": 22,
-        "lines": 2976,
+        "commits": 23,
+        "lines": 3244,
         "path": "README.zh.md"
       },
       {
@@ -466,7 +471,7 @@
       },
       {
         "commits": 22,
-        "lines": 651,
+        "lines": 649,
         "path": "atlas/README.md"
       },
       {
@@ -476,17 +481,17 @@
       },
       {
         "commits": 22,
-        "lines": 2468,
+        "lines": 2450,
         "path": "atlas/page.json"
       },
       {
         "commits": 22,
-        "lines": 16002,
+        "lines": 16000,
         "path": "atlas/statistics.json"
       },
       {
         "commits": 22,
-        "lines": 51728,
+        "lines": 52694,
         "path": "atlas/structure.json"
       },
       {
@@ -790,8 +795,8 @@
         "path": "backpropagate/theme_gradio_legacy.py"
       },
       {
-        "commits": 76,
-        "lines": 18520,
+        "commits": 77,
+        "lines": 18524,
         "path": "backpropagate/trainer.py"
       },
       {
@@ -2866,7 +2871,7 @@
       },
       {
         "commits": 55,
-        "lines": 539,
+        "lines": 564,
         "path": "pyproject.toml"
       },
       {
@@ -2875,8 +2880,8 @@
         "path": "requirements/bandit.in"
       },
       {
-        "commits": 1,
-        "lines": 137,
+        "commits": 2,
+        "lines": 145,
         "path": "requirements/bandit.txt"
       },
       {
@@ -2885,8 +2890,8 @@
         "path": "requirements/build-backend.in"
       },
       {
-        "commits": 1,
-        "lines": 79,
+        "commits": 2,
+        "lines": 130,
         "path": "requirements/build-backend.txt"
       },
       {
@@ -2895,13 +2900,13 @@
         "path": "requirements/build-tools.in"
       },
       {
-        "commits": 1,
-        "lines": 583,
+        "commits": 2,
+        "lines": 648,
         "path": "requirements/build-tools.txt"
       },
       {
-        "commits": 1,
-        "lines": 51,
+        "commits": 2,
+        "lines": 57,
         "path": "requirements/compile.sh"
       },
       {
@@ -2920,8 +2925,8 @@
         "path": "requirements/pip-audit.in"
       },
       {
-        "commits": 2,
-        "lines": 432,
+        "commits": 3,
+        "lines": 434,
         "path": "requirements/pip-audit.txt"
       },
       {
@@ -2930,8 +2935,8 @@
         "path": "requirements/sbom.in"
       },
       {
-        "commits": 1,
-        "lines": 649,
+        "commits": 2,
+        "lines": 821,
         "path": "requirements/sbom.txt"
       },
       {
@@ -2940,13 +2945,13 @@
         "path": "requirements/uv.in"
       },
       {
-        "commits": 1,
-        "lines": 23,
+        "commits": 2,
+        "lines": 25,
         "path": "requirements/uv.txt"
       },
       {
-        "commits": 6,
-        "lines": 215,
+        "commits": 7,
+        "lines": 217,
         "path": "scripts/README.md"
       },
       {
@@ -2960,8 +2965,8 @@
         "path": "scripts/build_ui_frontend.py"
       },
       {
-        "commits": 11,
-        "lines": 2667,
+        "commits": 12,
+        "lines": 2677,
         "path": "scripts/check_doc_drift.py"
       },
       {
@@ -3830,8 +3835,8 @@
         "path": "tests/test_rectangular_batches.py"
       },
       {
-        "commits": 1,
-        "lines": 69,
+        "commits": 2,
+        "lines": 76,
         "path": "tests/test_release_versions.py"
       },
       {
@@ -3895,8 +3900,8 @@
         "path": "tests/test_theme_gradio_legacy.py"
       },
       {
-        "commits": 43,
-        "lines": 6664,
+        "commits": 44,
+        "lines": 6669,
         "path": "tests/test_trainer.py"
       },
       {
@@ -3960,8 +3965,8 @@
         "path": "tests/test_ui_cov_auth.py"
       },
       {
-        "commits": 1,
-        "lines": 287,
+        "commits": 2,
+        "lines": 292,
         "path": "tests/test_ui_cov_logging.py"
       },
       {
@@ -3990,8 +3995,8 @@
         "path": "tests/test_ui_cov_state_bugs.py"
       },
       {
-        "commits": 8,
-        "lines": 1225,
+        "commits": 9,
+        "lines": 1227,
         "path": "tests/test_ui_cov_state_forms.py"
       },
       {
@@ -4201,7 +4206,7 @@
       },
       {
         "commits": 34,
-        "lines": 18356,
+        "lines": 19276,
         "path": "uv.lock"
       },
       {
@@ -4215,156 +4220,156 @@
     "level": "full",
     "reason": "at least 30 qualifying commits, and at least 20 source files reach 10 revisions"
   },
-  "generatedAt": "2026-11-12T07:50:36.470Z",
+  "generatedAt": "2026-11-13T00:10:31.764Z",
   "generatedFrom": {
-    "commit": "a9a03757ad48360e37334423b6a8674fee8d472c"
+    "commit": "e0f857089b6549c1de91a3e2b0ecfd25bc0c7c0d"
   },
   "pairs": [
     {
       "a": "README.es.md",
       "b": "README.fr.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.es.md",
       "b": "README.hi.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.es.md",
       "b": "README.it.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.es.md",
       "b": "README.ja.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.es.md",
       "b": "README.pt-BR.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.es.md",
       "b": "README.zh.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.fr.md",
       "b": "README.hi.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.fr.md",
       "b": "README.it.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.fr.md",
       "b": "README.ja.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.fr.md",
       "b": "README.pt-BR.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.fr.md",
       "b": "README.zh.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.hi.md",
       "b": "README.it.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.hi.md",
       "b": "README.ja.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.hi.md",
       "b": "README.pt-BR.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.hi.md",
       "b": "README.zh.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.it.md",
       "b": "README.ja.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.it.md",
       "b": "README.pt-BR.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.it.md",
       "b": "README.zh.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.ja.md",
       "b": "README.pt-BR.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.ja.md",
       "b": "README.zh.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
       "a": "README.pt-BR.md",
       "b": "README.zh.md",
-      "either": 13,
-      "shared": 13,
+      "either": 14,
+      "shared": 14,
       "strength": 1
     },
     {
@@ -4434,16 +4439,16 @@
     "floor": "strong",
     "floorHeld": false,
     "floorTrigger": null,
-    "headDate": "2026-11-12T02:33:24-05:00",
-    "inScopeFiles": 790,
+    "headDate": "2026-11-12T07:17:26-05:00",
+    "inScopeFiles": 791,
     "pinnedStart": null,
     "priorFloor": "strong",
-    "qualifyingCommits": 206,
+    "qualifyingCommits": 207,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 10,
-    "since": "2026-05-16T07:33:24.000Z",
+    "since": "2026-05-16T12:17:26.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",

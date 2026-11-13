@@ -52,15 +52,15 @@
           "path": ".github/dependabot.yml"
         },
         {
-          "hash": "e96399e0d4f358607d7ae55bcf8ebc56a6bae807d10ef78019eced077c9ada5c",
+          "hash": "f44618dcdb480952f9ddcddea02160ed0c785e6725e983f3fd8269d9ebf57fc6",
           "path": ".github/release-tools/package-lock.json"
         },
         {
-          "hash": "0b1e63695281b6ce047237b7eb3506fd8a0bb1c448a358d6a64eed493fbd2ecf",
+          "hash": "0f1b0e2e2043930ee7c85be68efc3898d1d598edae6732cdb0d239a9ac02757a",
           "path": ".github/release-tools/package.json"
         },
         {
-          "hash": "d99edbb2440dab74c866ea8b3ea94289def83c94d8396015d83fbd2350e0e5fe",
+          "hash": "b81939b0f6c51d1378bc5133b13b098d39a7b51de003cd9686e5b280d05dbab0",
           "path": ".github/workflows/ci.yml"
         },
         {
@@ -10134,7 +10134,7 @@
               "line": 8738
             }
           ],
-          "hash": "1a649603b5111b16d768f0fc5333d24b53b29139af2259c0a5612e1e505ed7c6",
+          "hash": "9b3b0882895a9837023ea8b5acd89dd8b07d9e6458a38bba0150731655f7ebac",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/block_engine.py",
@@ -14898,6 +14898,10 @@
           "path": ".npmignore"
         },
         {
+          "hash": "dfd5e947ab1eb7b0abf69dc1ada0d2fc8c2986d5e6abae953f5d6fb90f245fc2",
+          "path": ".polyglot-pins.json"
+        },
+        {
           "hash": "d25d45be04160aca56f42a989aca17db7a89cb86aac7340ffb704fe662c96076",
           "path": ".pre-commit-config.yaml"
         },
@@ -14942,23 +14946,23 @@
           "path": "PRODUCTION_READINESS_AUDIT.md"
         },
         {
-          "hash": "1dcdc48680bc60a6167413c5b6c684e38308ed2a17fb7c954c394e1d052c5dab",
+          "hash": "0b684cf69aa741ab91d69804bca4e90e2f4ed0572a463d9005366da49683bad7",
           "path": "README.es.md"
         },
         {
-          "hash": "c7364fdde42fbb59fd75351befb80e0ca5a9f4fb69fcad09dc2b843df37b1bac",
+          "hash": "5aa565d1c7ca6223b7da93c9b7965cb1c53c8268acd08c9d2723e22f24958ba0",
           "path": "README.fr.md"
         },
         {
-          "hash": "aecccbbf6347a0847a0850f413c5cf68d0a507d5d9440935cbd86a8bb792084a",
+          "hash": "1926913807002547030fb9bef10ff0cd34ae7c4ff6a5603711e1da4cb75cbc67",
           "path": "README.hi.md"
         },
         {
-          "hash": "c2a59ba141311d39a07bad31f83963358fcc3f9f1401ed3fc6a50454a78d33ce",
+          "hash": "f7f63140b926fcfad2df0741552c247cd26bc7155b6ffec411d0585968d4176c",
           "path": "README.it.md"
         },
         {
-          "hash": "b7e52d8fd957fe99f29e2435cc70f2f606fad89026deee51aa0c889e548996d8",
+          "hash": "01556dc82147dbb1b6242ed8d98a8c069d3355324bb8e4672919c0c3b3d189dc",
           "path": "README.ja.md"
         },
         {
@@ -14966,11 +14970,11 @@
           "path": "README.md"
         },
         {
-          "hash": "3f2e592c5d1d69a3c13c3be30a1863dc682eea30e0fd3f5eed995911887f231f",
+          "hash": "f04fd20b3039ffe91b73e574cec7d2682be7f8e171a774df39eee994e351e53c",
           "path": "README.pt-BR.md"
         },
         {
-          "hash": "417ab4a834e049f0457047aa678b35730cfdf049ade4683af3661113eef66677",
+          "hash": "1c2095e2dff935bfce611162b8032c0a789c8b6ec9a1e971f7fbd448b3d0cf17",
           "path": "README.zh.md"
         },
         {
@@ -15022,11 +15026,11 @@
           "path": "package.json"
         },
         {
-          "hash": "59bfbf239fd2f8aa083810ccaa0a49ff3fa928be31f472129d318e18a32bf44f",
+          "hash": "8348eeed0d727b346eef61cd5b39862f28bba24d77d6a7d7857f2f53ec3a2d90",
           "path": "pyproject.toml"
         },
         {
-          "hash": "7383255f828e28d05227710b4975e3e7c7ff06b17c4a76f1c7aea873266f60ab",
+          "hash": "18c7a8a1f1279a6aad861db9a3260d31dd01113a32963f1231e59a5e7d192aac",
           "path": "uv.lock"
         },
         {
@@ -18704,7 +18708,7 @@
             "lc_nostructlog",
             "restore_root_logging"
           ],
-          "hash": "bd2b6188c01e8b766c68d6c809c6615f98ed7b1d73f7ba600aa8b46a626371d7",
+          "hash": "ad4398987b87b161fc170b0fc05582dce4db5bab23f44228776f0e9289ae62b9",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/logging_config.py"
@@ -18842,7 +18846,7 @@
             "push_recorder",
             "sandbox"
           ],
-          "hash": "35d4829d896e5341dac89fa8093d144d6bf52b5a2486c8380e6321f9c10436a5",
+          "hash": "6c1c26d49dd07dc38a62f2b6cd7fc1ce8af55f8349e16ffcf2094004cf740f3a",
           "importOrder": [
             "backpropagate/__init__.py",
             "backpropagate/ui_state.py",
@@ -22571,8 +22575,8 @@
   ],
   "engine": "1.26.0",
   "generatedFrom": {
-    "commit": "a9a03757ad48360e37334423b6a8674fee8d472c",
-    "tracked": 785
+    "commit": "e0f857089b6549c1de91a3e2b0ecfd25bc0c7c0d",
+    "tracked": 786
   },
   "landings": [
     {

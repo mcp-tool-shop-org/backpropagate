@@ -10,7 +10,7 @@
 # image pins to 3.11 as the shipped runtime — it is one of several supported
 # Pythons, not the minimum. Operators on 3.12 / 3.13 should install
 # from PyPI directly into their own interpreter rather than this image.
-FROM python:3.11-slim@sha256:2c285c669cc837aa3bcf1af23ea1932b7b5214f9c9d3aad22417446ad91cb4fb AS builder
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928 AS builder
 WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml uv.lock README.md LICENSE ./
@@ -38,12 +38,12 @@ RUN /opt/tools/bin/pip wheel --no-cache-dir --no-deps --no-build-isolation --whe
 # version and SHA-256 (docker/fetch_bun.py). Without it Reflex would fetch bun
 # at container start through `curl | bash`, which needs curl and unzip (not in
 # the slim image) and runs an unpinned script.
-FROM python:3.11-slim@sha256:2c285c669cc837aa3bcf1af23ea1932b7b5214f9c9d3aad22417446ad91cb4fb AS bun
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928 AS bun
 ARG TARGETARCH
 COPY docker/fetch_bun.py /tmp/fetch_bun.py
 RUN python /tmp/fetch_bun.py "${TARGETARCH:-amd64}" /opt/bun/bin
 
-FROM python:3.11-slim@sha256:2c285c669cc837aa3bcf1af23ea1932b7b5214f9c9d3aad22417446ad91cb4fb
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=bun /opt/bun/bin/bun /opt/bun/bin/bun
